@@ -1,0 +1,7 @@
+/target
+/data
+*.log
+*.pem
+*.key
+.DS_Store
+Thumbs.db
