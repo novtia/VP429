@@ -141,7 +141,20 @@ impl CertAuthority {
             .context("调用 certutil 安装根证书失败")?;
 
         if output.status.success() {
-            Ok("已安装到当前用户受信任根证书存储区 (CurrentUser\\Root)".to_string())
+            // When running elevated, also install into LocalMachine\Root for system-wide trust
+            let mut msg = "已安装到当前用户受信任根证书存储区 (CurrentUser\\Root)".to_string();
+            if crate::mihomo::is_elevated() {
+                if let Ok(lm) = std::process::Command::new("certutil")
+                    .args(["-addstore", "Root", &self.ca_pem_path.to_string_lossy()])
+                    .output()
+                {
+                    if lm.status.success() {
+                        msg = "已安装到用户与本机受信任根证书存储区 (CurrentUser + LocalMachine\\Root)"
+                            .to_string();
+                    }
+                }
+            }
+            Ok(msg)
         } else {
             let err = String::from_utf8_lossy(&output.stderr);
             let out = String::from_utf8_lossy(&output.stdout);

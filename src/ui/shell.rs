@@ -601,6 +601,10 @@ impl MainView {
                                 MouseButton::Left,
                                 cx.listener(|this, _, _, cx| {
                                     this.sidebar_collapsed = !this.sidebar_collapsed;
+                                    if let Ok(mut cfg) = this.engine.config.write() {
+                                        cfg.sidebar_collapsed = this.sidebar_collapsed;
+                                    }
+                                    this.engine.save_config();
                                     cx.notify();
                                 }),
                             )

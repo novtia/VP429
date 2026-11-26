@@ -303,9 +303,65 @@ impl MainView {
                                     )
                                     .child(
                                         div()
-                                            .text_xs()
-                                            .text_color(theme::ink_muted())
-                                            .child("全局接管 · 无回环"),
+                                            .flex()
+                                            .items_center()
+                                            .gap_1p5()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(theme::ink_muted())
+                                                    .child(if crate::mihomo::is_elevated() {
+                                                        "全局接管 · 已提权"
+                                                    } else {
+                                                        "全局接管 · 需管理员"
+                                                    }),
+                                            )
+                                            .when(!crate::mihomo::is_elevated(), |el| {
+                                                el.child(
+                                                    div()
+                                                        .id("btn-elevate-tun")
+                                                        .px_1p5()
+                                                        .py(px(1.0))
+                                                        .rounded(px(3.0))
+                                                        .bg(theme::braun_orange())
+                                                        .hover(|s| s.bg(theme::braun_orange_border()))
+                                                        .text_size(px(10.0))
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(theme::white())
+                                                        .cursor_pointer()
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(|this, _, _, cx| {
+                                                                cx.stop_propagation();
+                                                                let eng = this.engine.clone();
+                                                                let rt = this.rt.clone();
+                                                                cx.spawn(async move |_, cx| {
+                                                                    let res = rt
+                                                                        .spawn_blocking(crate::mihomo::relaunch_as_admin)
+                                                                        .await;
+                                                                    match res {
+                                                                        Ok(Ok(())) => {
+                                                                            let _ = rt
+                                                                                .spawn(async move {
+                                                                                    eng.stop().await;
+                                                                                })
+                                                                                .await;
+                                                                            let _ = cx.update(|cx| cx.quit());
+                                                                        }
+                                                                        Ok(Err(e)) => {
+                                                                            eng.bus.error(format!("{}", e));
+                                                                        }
+                                                                        Err(e) => {
+                                                                            eng.bus.error(format!("提权任务异常: {}", e));
+                                                                        }
+                                                                    }
+                                                                })
+                                                                .detach();
+                                                            }),
+                                                        )
+                                                        .child("提权"),
+                                                )
+                                            }),
                                     ),
                             )
                             .child(render_pill_toggle(p_tun, 0xe84c1e)),
@@ -743,7 +799,7 @@ impl MainView {
                                 let eng = this.engine.clone();
                                 let name = name_click.clone();
                                 this.rt.spawn(async move {
-                                    let _ = eng.scheduler.select_manual(&name).await;
+                                    let _ = eng.select_node_manual(&name).await;
                                 });
                                 this.toggle_node_picker(false, cx);
                             }),

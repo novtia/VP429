@@ -115,6 +115,19 @@ impl NodeScheduler {
         self.bus.notify_state();
     }
 
+    /// Restores the previously persisted active node if it exists in the current node list.
+    pub fn restore_selected_node(&self, node_name: Option<&str>) {
+        let Some(target) = node_name else {
+            return;
+        };
+        if let Ok(mut g) = self.inner.write() {
+            if let Some(idx) = g.nodes.iter().position(|n| n.meta.name == target) {
+                g.active_index = idx;
+            }
+        }
+        self.bus.notify_state();
+    }
+
     pub fn set_latency(&self, node_name: &str, ms: Option<u64>) {
         if let Ok(mut g) = self.inner.write() {
             if let Some(node) = g.nodes.iter_mut().find(|n| n.meta.name == node_name) {

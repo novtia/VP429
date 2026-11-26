@@ -328,6 +328,38 @@ pub fn is_elevated() -> bool {
     false
 }
 
+/// Relaunches the current executable with UAC elevation (`runas`) on Windows so TUN can be created.
+#[cfg(windows)]
+pub fn relaunch_as_admin() -> Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let exe = std::env::current_exe().context("获取当前可执行文件路径失败")?;
+    let verb: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
+    let file: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let res = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (res as isize) <= 32 {
+        return Err(anyhow!("请求管理员权限失败或用户取消了 UAC 授权"));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn relaunch_as_admin() -> Result<()> {
+    Err(anyhow!("当前平台不支持自动提权"))
+}
+
 /// Detects if another VPN's TUN virtual adapter (e.g. "FlClash Meta Tunnel") is currently Up,
 /// which would cause double-hopped traffic and inflated latency.
 #[cfg(windows)]

@@ -51,7 +51,7 @@ impl MainView {
                         let eng = this.engine.clone();
                         let name = node_name_click.clone();
                         this.rt.spawn(async move {
-                            let _ = eng.scheduler.select_manual(&name).await;
+                            let _ = eng.select_node_manual(&name).await;
                         });
                         cx.notify();
                     }),

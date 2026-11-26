@@ -21,6 +21,7 @@ pub struct ParsedSubscription {
     pub raw_proxies: Vec<Value>,
     pub nodes: Vec<ProxyNodeMeta>,
     pub hosts: HashMap<String, String>,
+    pub fake_ip_filter: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -196,6 +197,23 @@ pub fn parse_clash_yaml(yaml_text: &str) -> Result<ParsedSubscription> {
         }
     }
 
+    // Preserve provider-specific `dns.fake-ip-filter` entries (e.g. BitzNet node domains)
+    let mut fake_ip_filter = Vec::new();
+    if let Some(seq) = doc
+        .get("dns")
+        .and_then(|d| d.get("fake-ip-filter"))
+        .and_then(|v| v.as_sequence())
+    {
+        for item in seq {
+            if let Some(s) = item.as_str() {
+                let clean = s.trim();
+                if !clean.is_empty() {
+                    fake_ip_filter.push(clean.to_string());
+                }
+            }
+        }
+    }
+
     let mut raw_proxies = Vec::new();
     let mut nodes = Vec::new();
 
@@ -261,6 +279,7 @@ pub fn parse_clash_yaml(yaml_text: &str) -> Result<ParsedSubscription> {
         raw_proxies,
         nodes,
         hosts,
+        fake_ip_filter,
     })
 }
 
@@ -273,6 +292,8 @@ pub fn generate_mihomo_config(
     sub: &ParsedSubscription,
     cfg: &AppConfig,
     api_secret: &str,
+    enable_mitm: bool,
+    enable_tun: bool,
 ) -> Result<String> {
     let mut root = Mapping::new();
 
@@ -326,6 +347,22 @@ pub fn generate_mihomo_config(
             Value::String("119.29.29.29".into()),
         ]),
     );
+    let mut filters: Vec<String> = vec![
+        "+.lan".into(),
+        "+.local".into(),
+        "+.msftconnecttest.com".into(),
+        "+.msftncsi.com".into(),
+        "localhost.ptlogin2.qq.com".into(),
+    ];
+    for f in &sub.fake_ip_filter {
+        if !filters.iter().any(|existing| existing.eq_ignore_ascii_case(f)) {
+            filters.push(f.clone());
+        }
+    }
+    dns.insert(
+        Value::String("fake-ip-filter".into()),
+        Value::Sequence(filters.into_iter().map(Value::String).collect()),
+    );
     root.insert(Value::String("dns".into()), Value::Mapping(dns));
 
     if !sub.hosts.is_empty() {
@@ -336,20 +373,46 @@ pub fn generate_mihomo_config(
         root.insert(Value::String("hosts".into()), Value::Mapping(hosts_map));
     }
 
+    // Sniffer block: recover TLS SNI hostname on pure-IP connections (e.g. cached DNS / DoH)
+    // so watch domains never bypass RUST-429-MITM via raw IP MATCH.
+    let mut sniffer = Mapping::new();
+    sniffer.insert(Value::String("enable".into()), Value::Bool(true));
+    sniffer.insert(Value::String("force-dns-mapping".into()), Value::Bool(true));
+    sniffer.insert(Value::String("parse-pure-ip".into()), Value::Bool(true));
+    sniffer.insert(
+        Value::String("override-destination".into()),
+        Value::Bool(true),
+    );
+    let mut sniff_protos = Mapping::new();
+    let mut tls_sniff = Mapping::new();
+    tls_sniff.insert(
+        Value::String("ports".into()),
+        Value::Sequence(vec![Value::Number(443.into()), Value::Number(8443.into())]),
+    );
+    sniff_protos.insert(Value::String("TLS".into()), Value::Mapping(tls_sniff));
+    let mut http_sniff = Mapping::new();
+    http_sniff.insert(
+        Value::String("ports".into()),
+        Value::Sequence(vec![
+            Value::Number(80.into()),
+            Value::String("8080-8880".into()),
+        ]),
+    );
+    sniff_protos.insert(Value::String("HTTP".into()), Value::Mapping(http_sniff));
+    sniffer.insert(Value::String("sniff".into()), Value::Mapping(sniff_protos));
+    root.insert(Value::String("sniffer".into()), Value::Mapping(sniffer));
+
     // TUN block
     let mut tun = Mapping::new();
-    tun.insert(Value::String("enable".into()), Value::Bool(cfg.enable_tun));
+    tun.insert(Value::String("enable".into()), Value::Bool(enable_tun));
     tun.insert(
         Value::String("stack".into()),
         Value::String("mixed".into()),
     );
-    tun.insert(
-        Value::String("auto-route".into()),
-        Value::Bool(cfg.enable_tun),
-    );
+    tun.insert(Value::String("auto-route".into()), Value::Bool(enable_tun));
     tun.insert(
         Value::String("auto-detect-interface".into()),
-        Value::Bool(cfg.enable_tun),
+        Value::Bool(enable_tun),
     );
     tun.insert(
         Value::String("dns-hijack".into()),
@@ -431,13 +494,44 @@ pub fn generate_mihomo_config(
         Value::String("IP-CIDR,10.0.0.0/8,DIRECT,no-resolve".into()),
     ];
 
-    for dom in &cfg.watch_domains {
-        let clean = dom.trim().trim_start_matches("*.");
-        if !clean.is_empty() {
-            rules.push(Value::String(format!(
-                "DOMAIN-SUFFIX,{},{}",
-                clean, MITM_PROXY_NAME
-            )));
+    if enable_mitm {
+        for dom in &cfg.watch_domains {
+            let trimmed = dom.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("*.") {
+                let clean = trimmed.trim_start_matches("*.");
+                if !clean.is_empty() {
+                    // Reject QUIC (UDP/443) on watch domains so clients fall back to TCP HTTPS for MITM
+                    rules.push(Value::String(format!(
+                        "AND,((NETWORK,UDP),(DST-PORT,443),(DOMAIN-SUFFIX,{})),REJECT",
+                        clean
+                    )));
+                    rules.push(Value::String(format!(
+                        "DOMAIN-SUFFIX,{},{}",
+                        clean, MITM_PROXY_NAME
+                    )));
+                }
+            } else if trimmed.contains('*') {
+                rules.push(Value::String(format!(
+                    "AND,((NETWORK,UDP),(DST-PORT,443),(DOMAIN-WILDCARD,{})),REJECT",
+                    trimmed
+                )));
+                rules.push(Value::String(format!(
+                    "DOMAIN-WILDCARD,{},{}",
+                    trimmed, MITM_PROXY_NAME
+                )));
+            } else {
+                rules.push(Value::String(format!(
+                    "AND,((NETWORK,UDP),(DST-PORT,443),(DOMAIN-SUFFIX,{})),REJECT",
+                    trimmed
+                )));
+                rules.push(Value::String(format!(
+                    "DOMAIN-SUFFIX,{},{}",
+                    trimmed, MITM_PROXY_NAME
+                )));
+            }
         }
     }
     rules.push(Value::String(format!("MATCH,{}", POOL_GROUP_NAME)));
@@ -479,7 +573,7 @@ proxies:
 
         let mut cfg = AppConfig::default();
         cfg.enable_tun = true;
-        let runtime_yaml = generate_mihomo_config(&parsed, &cfg, "secret123").unwrap();
+        let runtime_yaml = generate_mihomo_config(&parsed, &cfg, "secret123", true, true).unwrap();
 
         assert!(runtime_yaml.contains("vertex-bypass"));
         assert!(runtime_yaml.contains("port: 17892"));

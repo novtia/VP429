@@ -12,6 +12,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -24,6 +25,7 @@ type ProxyBody = BoxBody<Bytes, hyper::Error>;
 pub struct MitmProxyContext {
     pub config: Arc<RwLock<AppConfig>>,
     pub ca: Arc<CertAuthority>,
+    pub ca_installed: Arc<AtomicBool>,
     pub scheduler: Arc<NodeScheduler>,
     pub bus: Arc<EventBus>,
     pub upstream_tls: Arc<ClientConfig>,
@@ -115,15 +117,17 @@ async fn handle_client_connection(
 
     if method.eq_ignore_ascii_case("CONNECT") {
         let (host, port) = split_host_port(target, 443);
-        let should_mitm = force_mitm || {
-            ctx.config
-                .read()
-                .map(|c| c.matches_watch_domain(&host))
-                .unwrap_or(false)
-        };
+        let ca_ready = ctx.ca_installed.load(Ordering::Relaxed);
+        let should_mitm = ca_ready
+            && (force_mitm
+                || ctx
+                    .config
+                    .read()
+                    .map(|c| c.matches_watch_domain(&host))
+                    .unwrap_or(false));
 
         if !should_mitm {
-            // Non-watch domain: blind tunnel straight through mihomo mixed port (zero decryption)
+            // Non-watch domain or CA not installed: blind tunnel straight through mihomo mixed port (zero decryption)
             let mixed_port = ctx
                 .config
                 .read()
@@ -135,27 +139,47 @@ async fn handle_client_connection(
             return Ok(());
         }
 
-        // Selective HTTPS MITM for watch domains (e.g. Vertex AI *.googleapis.com)
+        // Selective HTTPS MITM for watch domains (e.g. Vertex AI aiplatform.googleapis.com)
         client
             .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             .await?;
 
         let server_cfg = ctx.ca.server_config_for_host(&host)?;
         let acceptor = TlsAcceptor::from(server_cfg);
-        let tls_stream = acceptor.accept(client).await?;
+        let tls_stream = acceptor.accept(client).await.map_err(|e| {
+            anyhow!(
+                "{} 客户端拒绝 MITM 证书 ({})，请确认已安装根证书或将该域名移出监听列表",
+                host,
+                e
+            )
+        })?;
 
         let io = TokioIo::new(tls_stream);
         let host_arc = Arc::new(host);
+        let host_for_err = host_arc.clone();
+        let ctx_for_err = ctx.clone();
         let service = service_fn(move |req: Request<Incoming>| {
             let ctx = ctx.clone();
             let host = host_arc.clone();
             async move { handle_mitm_http_request(req, host, port, ctx).await }
         });
 
-        let _ = hyper::server::conn::http1::Builder::new()
+        if let Err(err) = hyper::server::conn::http1::Builder::new()
             .preserve_header_case(true)
             .serve_connection(io, service)
-            .await;
+            .await
+        {
+            let msg = err.to_string();
+            if !msg.contains("connection closed")
+                && !msg.contains("unexpected eof")
+                && !msg.contains("early eof")
+                && !msg.contains("error shutting down connection")
+            {
+                ctx_for_err
+                    .bus
+                    .error(format!("[MITM] {} HTTP 会话异常: {}", host_for_err, msg));
+            }
+        }
         Ok(())
     } else {
         // Plain HTTP proxy request: forward straight to mihomo mixed port
@@ -209,16 +233,27 @@ async fn handle_mitm_http_request(
             .prepare_for_request()
             .await
             .unwrap_or_else(|| "DIRECT".to_string());
+        let method_str = parts.method.to_string();
         let forward_req = Request::from_parts(parts, incoming_body.boxed());
         return match send_upstream_https(forward_req, &host, port, bypass_port, &ctx.upstream_tls)
             .await
         {
             Ok(resp) => {
                 let code = resp.status().as_u16();
-                if intercept_codes.contains(&code) {
+                let is_grpc_429 = resp
+                    .headers()
+                    .get("grpc-status")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.trim() == "8")
+                    .unwrap_or(false);
+                if intercept_codes.contains(&code) || is_grpc_429 {
                     let _ = ctx.scheduler.report_429(&used_node, &host).await;
                 } else {
                     ctx.scheduler.record_success(&used_node, false);
+                    ctx.bus.info(format!(
+                        "[MITM] {} {} -> HTTP {} (节点: {})",
+                        method_str, host, code, used_node
+                    ));
                 }
                 Ok(resp.map(|b| b.boxed()))
             }
@@ -268,7 +303,13 @@ async fn handle_mitm_http_request(
         match send_upstream_https(forward_req, &host, port, bypass_port, &ctx.upstream_tls).await {
             Ok(resp) => {
                 let code = resp.status().as_u16();
-                if intercept_codes.contains(&code) {
+                let is_grpc_429 = resp
+                    .headers()
+                    .get("grpc-status")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.trim() == "8")
+                    .unwrap_or(false);
+                if intercept_codes.contains(&code) || is_grpc_429 {
                     let next_node = ctx
                         .scheduler
                         .report_429(&current_node, &host)
@@ -288,6 +329,11 @@ async fn handle_mitm_http_request(
                         ctx.bus.ok(format!(
                             "{} 透明重试 #{} 成功 -> HTTP {} (节点: {})",
                             host, attempt, code, current_node
+                        ));
+                    } else {
+                        ctx.bus.info(format!(
+                            "[MITM] {} {} -> HTTP {} (节点: {})",
+                            parts.method, host, code, current_node
                         ));
                     }
                     return Ok(resp.map(|b| b.boxed()));
@@ -534,6 +580,7 @@ mod tests {
         let ctx = MitmProxyContext {
             config: Arc::new(RwLock::new(cfg)),
             ca: ca.clone(),
+            ca_installed: Arc::new(AtomicBool::new(true)),
             scheduler: scheduler.clone(),
             bus: bus.clone(),
             upstream_tls: upstream_tls.clone(),

@@ -63,6 +63,9 @@ pub struct AppConfig {
     pub max_retry_body_bytes: usize,
     pub watch_domains: Vec<String>,
     pub intercept_status_codes: Vec<u16>,
+    pub selected_node: Option<String>,
+    pub outbound_mode: String,
+    pub sidebar_collapsed: bool,
 }
 
 impl Default for AppConfig {
@@ -87,10 +90,14 @@ impl Default for AppConfig {
             max_retry_body_bytes: 16 * 1024 * 1024,
             watch_domains: vec![
                 "aiplatform.googleapis.com".to_string(),
+                "*-aiplatform.googleapis.com".to_string(),
                 "generativelanguage.googleapis.com".to_string(),
-                "*.googleapis.com".to_string(),
+                "aicode.googleapis.com".to_string(),
             ],
             intercept_status_codes: vec![429],
+            selected_node: None,
+            outbound_mode: "rule".to_string(),
+            sidebar_collapsed: false,
         }
     }
 }
@@ -219,6 +226,10 @@ impl AppConfig {
                 if host_lower == suffix || host_lower.ends_with(&format!(".{}", suffix)) {
                     return true;
                 }
+            } else if let Some(suffix) = pat.strip_prefix('*') {
+                if host_lower.ends_with(suffix) {
+                    return true;
+                }
             } else if host_lower == pat || host_lower.ends_with(&format!(".{}", pat)) {
                 return true;
             }
@@ -255,7 +266,7 @@ mod tests {
         assert!(cfg.matches_watch_domain("us-central1-aiplatform.googleapis.com"));
         assert!(cfg.matches_watch_domain("aiplatform.googleapis.com"));
         assert!(cfg.matches_watch_domain("generativelanguage.googleapis.com"));
-        assert!(cfg.matches_watch_domain("storage.googleapis.com"));
+        assert!(!cfg.matches_watch_domain("oauth2.googleapis.com"));
         assert!(!cfg.matches_watch_domain("github.com"));
         assert!(!cfg.matches_watch_domain("evilgoogleapis.com"));
     }

@@ -85,7 +85,7 @@ pub struct ProxyEngine {
     running: AtomicBool,
     testing_latency: AtomicBool,
     shutdown_tx: Mutex<Option<watch::Sender<bool>>>,
-    ca_installed: AtomicBool,
+    ca_installed: Arc<AtomicBool>,
 }
 
 impl ProxyEngine {
@@ -107,10 +107,16 @@ impl ProxyEngine {
             .or_else(load_cached_subscription);
         if let Some(ref sub) = cached_sub {
             scheduler.load_nodes(sub.nodes.clone());
+            scheduler.restore_selected_node(config.selected_node.as_deref());
             bus.info(format!("已从本地缓存加载 {} 个节点", sub.nodes.len()));
         } else {
             bus.info("欢迎使用 VP429，请前往「配置文件」点击右下角 + 添加订阅 URL");
         }
+
+        let initial_outbound_mode = match config.outbound_mode.as_str() {
+            "rule" | "global" | "direct" => config.outbound_mode.clone(),
+            _ => "rule".to_string(),
+        };
 
         Ok(Arc::new(Self {
             config: Arc::new(RwLock::new(config)),
@@ -131,12 +137,12 @@ impl ProxyEngine {
                 exit_ip: None,
                 exit_country_code: None,
                 checking_ip: false,
-                outbound_mode: "rule".to_string(),
+                outbound_mode: initial_outbound_mode,
             }),
             running: AtomicBool::new(false),
             testing_latency: AtomicBool::new(false),
             shutdown_tx: Mutex::new(None),
-            ca_installed: AtomicBool::new(ca_installed),
+            ca_installed: Arc::new(AtomicBool::new(ca_installed)),
         }))
     }
 
@@ -169,17 +175,44 @@ impl ProxyEngine {
         }
     }
 
+    pub async fn select_node_manual(&self, node_name: &str) -> Option<String> {
+        let switched = self.scheduler.select_manual(node_name).await;
+        if let Some(ref name) = switched {
+            if let Ok(mut cfg) = self.config.write() {
+                cfg.selected_node = Some(name.clone());
+            }
+            self.save_config();
+        }
+        switched
+    }
+
     pub async fn set_outbound_mode(&self, mode: &str) {
         {
             let mut t = self.telemetry.write().unwrap();
             t.outbound_mode = mode.to_string();
         }
+        if let Ok(mut cfg) = self.config.write() {
+            cfg.outbound_mode = mode.to_string();
+        }
+        self.save_config();
         let api = self.api_client.read().unwrap().clone();
         if let Some(api) = api {
-            if let Err(e) = api.set_mode(mode).await {
+            // Note: our `rule` config already routes all non-LAN traffic to VERTEX-POOL while
+            // keeping watch_domains routed through RUST-429-MITM. Switching Mihomo itself to
+            // `global` would skip `rules:` and bypass TUN 429 MITM interception!
+            let mihomo_mode = if mode == "direct" { "direct" } else { "rule" };
+            if let Err(e) = api.set_mode(mihomo_mode).await {
                 self.bus.error(format!("切换出站模式失败: {}", e));
             } else {
-                self.bus.info(format!("出站模式已切换为: {}", mode));
+                if mode == "global" {
+                    let _ = api
+                        .select_proxy_group("GLOBAL", crate::subscription::POOL_GROUP_NAME)
+                        .await;
+                    self.bus
+                        .info("出站模式已切换为: global（全局代理 + 保留 429 MITM 拦截）");
+                } else {
+                    self.bus.info(format!("出站模式已切换为: {}", mode));
+                }
             }
         }
         self.bus.notify_state();
@@ -437,8 +470,10 @@ impl ProxyEngine {
                 }
             }
         }
+        let saved_node = self.config.read().unwrap().selected_node.clone();
         self.save_config();
         self.scheduler.load_nodes(parsed.nodes.clone());
+        self.scheduler.restore_selected_node(saved_node.as_deref());
         *self.subscription.write().unwrap() = Some(parsed);
         self.bus.ok(format!("已切换至配置「{}」({} 节点)", name, count));
         self.bus.notify_state();
@@ -494,7 +529,9 @@ impl ProxyEngine {
         }
         self.save_config();
         if is_active {
+            let saved_node = self.config.read().unwrap().selected_node.clone();
             self.scheduler.load_nodes(parsed.nodes.clone());
+            self.scheduler.restore_selected_node(saved_node.as_deref());
             *self.subscription.write().unwrap() = Some(parsed);
         }
         self.bus.ok(format!("配置「{}」更新完成，共 {} 个节点", name, count));
@@ -548,9 +585,18 @@ impl ProxyEngine {
             .clone()
             .ok_or_else(|| anyhow!("请先同步有效的 Clash 订阅 URL"))?;
 
+        let effective_tun = cfg.enable_tun && is_elevated();
+        let enable_mitm = self.is_ca_installed();
+
         if cfg.enable_tun && !is_elevated() {
-            self.bus
-                .warn_429("当前非管理员权限，TUN 虚拟网卡可能无法创建，建议以管理员身份运行或关闭 TUN");
+            self.bus.warn_429(
+                "当前非管理员权限，本次已自动关闭 TUN（仍使用系统代理）；如需 TUN 请点击仪表盘「提权」以管理员身份重启",
+            );
+        }
+        if !enable_mitm {
+            self.bus.info(
+                "本地根证书未安装，已自动使用纯代理直通模式（如需启用 429 自动重试拦截，请前往「429 策略」安装根证书后重启代理）",
+            );
         }
 
         let mihomo_bin = MihomoManager::resolve_binary_path(&cfg)
@@ -563,7 +609,8 @@ impl ProxyEngine {
                 other_tun
             ));
         }
-        let runtime_yaml = generate_mihomo_config(&sub, &cfg, &secret)?;
+        let runtime_yaml =
+            generate_mihomo_config(&sub, &cfg, &secret, enable_mitm, effective_tun)?;
         let runtime_path = AppConfig::runtime_yaml_path();
         fs::write(&runtime_path, runtime_yaml)?;
 
@@ -586,8 +633,14 @@ impl ProxyEngine {
 
         *self.api_client.write().unwrap() = Some(api.clone());
         self.scheduler.set_switcher(Some(Arc::new(api.clone())));
+        // Point Mihomo's built-in GLOBAL group to VERTEX-POOL so Global mode routes through the selected node (not DIRECT)
+        let _ = api
+            .select_proxy_group("GLOBAL", crate::subscription::POOL_GROUP_NAME)
+            .await;
         if let Some(cur) = self.scheduler.current_node_name() {
-            let _ = api.select_proxy_group(crate::subscription::POOL_GROUP_NAME, &cur).await;
+            let _ = api
+                .select_proxy_group(crate::subscription::POOL_GROUP_NAME, &cur)
+                .await;
         }
 
         let (shut_tx, shut_rx) = watch::channel(false);
@@ -596,6 +649,7 @@ impl ProxyEngine {
         let ctx = MitmProxyContext {
             config: self.config.clone(),
             ca: self.ca.clone(),
+            ca_installed: self.ca_installed.clone(),
             scheduler: self.scheduler.clone(),
             bus: self.bus.clone(),
             upstream_tls: MitmProxyContext::build_default_upstream_tls(Vec::new()),
@@ -666,8 +720,8 @@ impl ProxyEngine {
             t.local_ip = detect_local_ip();
             t.outbound_mode.clone()
         };
-        if init_mode != "rule" {
-            let _ = api.set_mode(&init_mode).await;
+        if init_mode == "direct" {
+            let _ = api.set_mode("direct").await;
         }
 
         // Stream live bandwidth from Mihomo `/traffic` endpoint
@@ -721,10 +775,17 @@ impl ProxyEngine {
         });
 
         self.bus.ok(format!(
-            "代理服务已就绪 (本地 :{}, Bypass :{}, TUN: {})",
+            "代理服务已就绪 (本地 :{}, Bypass :{}, TUN: {}, MITM: {})",
             cfg.local_proxy_port,
             cfg.mihomo_bypass_port,
-            if cfg.enable_tun { "ON" } else { "OFF" }
+            if effective_tun {
+                "ON"
+            } else if cfg.enable_tun {
+                "OFF/需管理员"
+            } else {
+                "OFF"
+            },
+            if enable_mitm { "ON" } else { "直通" }
         ));
         self.bus.notify_state();
         Ok(())
@@ -826,7 +887,7 @@ impl ProxyEngine {
                 ));
             }
             let temp_yaml_path = AppConfig::data_dir().join("mihomo-ping-temp.yaml");
-            match generate_mihomo_config(&sub, &temp_cfg, &secret)
+            match generate_mihomo_config(&sub, &temp_cfg, &secret, false, false)
                 .and_then(|y| fs::write(&temp_yaml_path, y).map_err(Into::into))
             {
                 Ok(()) => {}

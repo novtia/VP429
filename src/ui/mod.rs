@@ -152,7 +152,7 @@ impl MainView {
             engine,
             rt,
             page: NavPage::Dashboard,
-            sidebar_collapsed: false,
+            sidebar_collapsed: cfg.sidebar_collapsed,
             show_add_modal: false,
             open_profile_menu: None,
             show_node_picker: false,
