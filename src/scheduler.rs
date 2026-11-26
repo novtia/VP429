@@ -56,6 +56,7 @@ impl NodeEntry {
 struct SchedulerInner {
     nodes: Vec<NodeEntry>,
     active_index: usize,
+    excluded_node: Option<String>,
     mode: RotationMode,
     cooldown: Duration,
     total_429: u64,
@@ -74,6 +75,7 @@ impl NodeScheduler {
             inner: RwLock::new(SchedulerInner {
                 nodes: Vec::new(),
                 active_index: 0,
+                excluded_node: None,
                 mode,
                 cooldown: Duration::from_secs(cooldown_secs.max(1)),
                 total_429: 0,
@@ -82,6 +84,58 @@ impl NodeScheduler {
             }),
             bus,
         })
+    }
+
+    pub fn set_excluded_node(&self, node_name: Option<String>) {
+        if let Ok(mut g) = self.inner.write() {
+            g.excluded_node = node_name;
+        }
+        self.bus.notify_state();
+    }
+
+    /// Ensures the active front-end node is not the excluded landing node (avoids chain self-loop).
+    pub async fn ensure_not_excluded(&self) -> Option<String> {
+        let (target_name, switcher) = {
+            let mut g = self.inner.write().ok()?;
+            if g.nodes.len() <= 1 {
+                return g.nodes.get(g.active_index).map(|n| n.meta.name.clone());
+            }
+            let Some(ref excl) = g.excluded_node.clone() else {
+                return g.nodes.get(g.active_index).map(|n| n.meta.name.clone());
+            };
+            if g.nodes.get(g.active_index).map(|n| n.meta.name.as_str()) != Some(excl.as_str()) {
+                return g.nodes.get(g.active_index).map(|n| n.meta.name.clone());
+            }
+            let now = Instant::now();
+            let next_idx = Self::find_next_ready(&g.nodes, g.active_index, now, Some(excl.as_str()))
+                .or_else(|| {
+                    (1..=g.nodes.len())
+                        .map(|s| (g.active_index + s) % g.nodes.len())
+                        .find(|&i| g.nodes[i].meta.name != *excl)
+                })
+                .unwrap_or(g.active_index);
+            g.active_index = next_idx;
+            (g.nodes[next_idx].meta.name.clone(), g.switcher.clone())
+        };
+        self.bus.info(format!(
+            "为避免链式代理自环，前置节点已自动切换至 {}",
+            target_name
+        ));
+        let switched = self.apply_switch(target_name, switcher).await;
+        self.bus.notify_state();
+        Some(switched)
+    }
+
+    /// Records a 429 hit when chain proxy is active (fixed exit IP: no cooldown or exit rotation).
+    pub fn record_429_fixed_exit(&self, target_host: &str) {
+        if let Ok(mut g) = self.inner.write() {
+            g.total_429 += 1;
+        }
+        self.bus.warn_429(format!(
+            "{} 命中 429（链式代理已锁定固定出口，不切换出口 IP）",
+            target_host
+        ));
+        self.bus.notify_state();
     }
 
     pub fn set_switcher(&self, switcher: Option<Arc<dyn ProxySwitcher>>) {
@@ -163,8 +217,11 @@ impl NodeScheduler {
                 return None;
             }
             let now = Instant::now();
+            let excl = g.excluded_node.clone();
             if g.mode == RotationMode::RoundRobinPerRequest {
-                if let Some(next_idx) = Self::find_next_ready(&g.nodes, g.active_index, now) {
+                if let Some(next_idx) =
+                    Self::find_next_ready(&g.nodes, g.active_index, now, excl.as_deref())
+                {
                     g.active_index = next_idx;
                 }
                 (
@@ -173,7 +230,9 @@ impl NodeScheduler {
                     true,
                 )
             } else if !g.nodes[g.active_index].is_ready(now) {
-                if let Some(next_idx) = Self::find_next_ready(&g.nodes, g.active_index, now) {
+                if let Some(next_idx) =
+                    Self::find_next_ready(&g.nodes, g.active_index, now, excl.as_deref())
+                {
                     g.active_index = next_idx;
                     (
                         g.nodes[next_idx].meta.name.clone(),
@@ -219,21 +278,27 @@ impl NodeScheduler {
                 off_idx = idx;
             }
 
-            let (next_idx, all_cooled) = match Self::find_next_ready(&g.nodes, off_idx, now) {
-                Some(idx) => (idx, false),
-                None => {
-                    // Fallback: pick node with earliest cooldown_until (excluding current if possible)
-                    let best = g
-                        .nodes
-                        .iter()
-                        .enumerate()
-                        .filter(|(i, _)| g.nodes.len() == 1 || *i != off_idx)
-                        .min_by_key(|(_, n)| n.cooldown_until.unwrap_or(now))
-                        .map(|(i, _)| i)
-                        .unwrap_or(0);
-                    (best, true)
-                }
-            };
+            let excl = g.excluded_node.clone();
+            let (next_idx, all_cooled) =
+                match Self::find_next_ready(&g.nodes, off_idx, now, excl.as_deref()) {
+                    Some(idx) => (idx, false),
+                    None => {
+                        // Fallback: pick node with earliest cooldown_until (excluding current/excluded if possible)
+                        let best = g
+                            .nodes
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, n)| {
+                                (g.nodes.len() == 1 || *i != off_idx)
+                                    && (g.nodes.len() <= 1
+                                        || excl.as_deref() != Some(n.meta.name.as_str()))
+                            })
+                            .min_by_key(|(_, n)| n.cooldown_until.unwrap_or(now))
+                            .map(|(i, _)| i)
+                            .unwrap_or(0);
+                        (best, true)
+                    }
+                };
 
             g.active_index = next_idx;
             (
@@ -265,8 +330,20 @@ impl NodeScheduler {
                 return None;
             }
             let now = Instant::now();
-            let next_idx = Self::find_next_ready(&g.nodes, g.active_index, now)
-                .unwrap_or((g.active_index + 1) % g.nodes.len());
+            let excl = g.excluded_node.clone();
+            let next_idx =
+                Self::find_next_ready(&g.nodes, g.active_index, now, excl.as_deref()).unwrap_or_else(
+                    || {
+                        if g.nodes.len() <= 1 {
+                            0
+                        } else {
+                            (1..=g.nodes.len())
+                                .map(|s| (g.active_index + s) % g.nodes.len())
+                                .find(|&i| excl.as_deref() != Some(g.nodes[i].meta.name.as_str()))
+                                .unwrap_or((g.active_index + 1) % g.nodes.len())
+                        }
+                    },
+                );
             g.active_index = next_idx;
             (
                 g.nodes[next_idx].meta.name.clone(),
@@ -343,13 +420,21 @@ impl NodeScheduler {
         }
     }
 
-    fn find_next_ready(nodes: &[NodeEntry], from: usize, now: Instant) -> Option<usize> {
+    fn find_next_ready(
+        nodes: &[NodeEntry],
+        from: usize,
+        now: Instant,
+        excluded: Option<&str>,
+    ) -> Option<usize> {
         let len = nodes.len();
         if len == 0 {
             return None;
         }
         for step in 1..=len {
             let idx = (from + step) % len;
+            if len > 1 && excluded == Some(nodes[idx].meta.name.as_str()) {
+                continue;
+            }
             if nodes[idx].is_ready(now) {
                 return Some(idx);
             }
@@ -458,5 +543,31 @@ mod tests {
         assert_eq!(n1.as_deref(), Some("Node-B"));
         assert_eq!(n2.as_deref(), Some("Node-C"));
         assert_eq!(n3.as_deref(), Some("Node-A"));
+    }
+
+    #[tokio::test]
+    async fn test_chain_exclusion_and_fixed_exit_429() {
+        let bus = EventBus::new();
+        let sched = NodeScheduler::new(RotationMode::On429Only, 60, bus);
+        sched.load_nodes(sample_nodes());
+        assert_eq!(sched.current_node_name().as_deref(), Some("Node-A"));
+
+        // Exclude Node-A (set as landing node) -> front-end automatically avoids self-loop
+        sched.set_excluded_node(Some("Node-A".into()));
+        let front = sched.ensure_not_excluded().await;
+        assert_eq!(front.as_deref(), Some("Node-B"));
+
+        // Rotating front-end skips Node-A
+        let r1 = sched.rotate_next("test").await;
+        assert_eq!(r1.as_deref(), Some("Node-C"));
+        let r2 = sched.rotate_next("test").await;
+        assert_eq!(r2.as_deref(), Some("Node-B"));
+
+        // Fixed exit 429 records counter without cooling down or switching
+        sched.record_429_fixed_exit("aiplatform.googleapis.com");
+        let snap = sched.snapshot();
+        assert_eq!(snap.total_429, 1);
+        assert_eq!(snap.cooldown_count, 0);
+        assert_eq!(snap.active_node.as_deref(), Some("Node-B"));
     }
 }

@@ -1,4 +1,6 @@
-use crate::config::{derive_profile_name, AppConfig, RotationMode, SubscriptionProfile};
+use crate::config::{
+    derive_profile_name, AppConfig, ChainExitSource, RotationMode, SubscriptionProfile,
+};
 use crate::mihomo::{
     detect_other_vpn_tun, download_mihomo_core, is_elevated, MihomoApiClient, MihomoManager,
 };
@@ -8,7 +10,8 @@ use crate::scheduler::NodeScheduler;
 use crate::state::EventBus;
 use crate::subscription::{
     fetch_subscription_to_path, generate_mihomo_config, load_cached_subscription,
-    load_cached_subscription_from, ParsedSubscription,
+    load_cached_subscription_from, parse_custom_exit_proxy, resolve_chain_exit_mapping,
+    ParsedSubscription, CHAIN_EXIT_PROXY_NAME, OUTBOUND_GROUP_NAME, POOL_GROUP_NAME,
 };
 use crate::sysproxy;
 use anyhow::{anyhow, Result};
@@ -80,6 +83,8 @@ pub struct ProxyEngine {
     pub ca: Arc<CertAuthority>,
     mihomo: Arc<MihomoManager>,
     api_client: RwLock<Option<MihomoApiClient>>,
+    runtime_secret: RwLock<Option<String>>,
+    runtime_has_chain_exit: AtomicBool,
     subscription: RwLock<Option<ParsedSubscription>>,
     telemetry: RwLock<TelemetryInner>,
     running: AtomicBool,
@@ -108,6 +113,13 @@ impl ProxyEngine {
         if let Some(ref sub) = cached_sub {
             scheduler.load_nodes(sub.nodes.clone());
             scheduler.restore_selected_node(config.selected_node.as_deref());
+            if config.enable_chain_proxy {
+                if let Some(ChainExitSource::SubscriptionNode { ref name }) =
+                    config.chain_exit_source
+                {
+                    scheduler.set_excluded_node(Some(name.clone()));
+                }
+            }
             bus.info(format!("已从本地缓存加载 {} 个节点", sub.nodes.len()));
         } else {
             bus.info("欢迎使用 VP429，请前往「配置文件」点击右下角 + 添加订阅 URL");
@@ -125,6 +137,8 @@ impl ProxyEngine {
             ca,
             mihomo,
             api_client: RwLock::new(None),
+            runtime_secret: RwLock::new(None),
+            runtime_has_chain_exit: AtomicBool::new(false),
             subscription: RwLock::new(cached_sub),
             telemetry: RwLock::new(TelemetryInner {
                 up_bps: 0,
@@ -205,9 +219,7 @@ impl ProxyEngine {
                 self.bus.error(format!("切换出站模式失败: {}", e));
             } else {
                 if mode == "global" {
-                    let _ = api
-                        .select_proxy_group("GLOBAL", crate::subscription::POOL_GROUP_NAME)
-                        .await;
+                    let _ = api.select_proxy_group("GLOBAL", OUTBOUND_GROUP_NAME).await;
                     self.bus
                         .info("出站模式已切换为: global（全局代理 + 保留 429 MITM 拦截）");
                 } else {
@@ -611,13 +623,18 @@ impl ProxyEngine {
         }
         let runtime_yaml =
             generate_mihomo_config(&sub, &cfg, &secret, enable_mitm, effective_tun)?;
+        let has_chain_exit = cfg
+            .chain_exit_source
+            .as_ref()
+            .map(|s| resolve_chain_exit_mapping(&sub, s).is_ok())
+            .unwrap_or(false);
         let runtime_path = AppConfig::runtime_yaml_path();
         fs::write(&runtime_path, runtime_yaml)?;
 
         self.bus.info("正在启动 Mihomo 内核...");
         self.mihomo.start(&mihomo_bin, &runtime_path).await?;
 
-        let api = MihomoApiClient::new(cfg.mihomo_api_port, secret);
+        let api = MihomoApiClient::new(cfg.mihomo_api_port, secret.clone());
         let mut ready = false;
         for _ in 0..25 {
             if api.health_check().await {
@@ -632,15 +649,31 @@ impl ProxyEngine {
         }
 
         *self.api_client.write().unwrap() = Some(api.clone());
+        *self.runtime_secret.write().unwrap() = Some(secret);
+        self.runtime_has_chain_exit
+            .store(has_chain_exit, Ordering::SeqCst);
         self.scheduler.set_switcher(Some(Arc::new(api.clone())));
-        // Point Mihomo's built-in GLOBAL group to VERTEX-POOL so Global mode routes through the selected node (not DIRECT)
+        // Avoid self-loop if chain proxy is enabled on startup with a subscription landing node
+        if cfg.enable_chain_proxy && has_chain_exit {
+            if let Some(ChainExitSource::SubscriptionNode { ref name }) = cfg.chain_exit_source {
+                self.scheduler.set_excluded_node(Some(name.clone()));
+                let _ = self.scheduler.ensure_not_excluded().await;
+            }
+        } else {
+            self.scheduler.set_excluded_node(None);
+        }
+        // Point Mihomo's built-in GLOBAL group to VERTEX-OUTBOUND
+        let _ = api.select_proxy_group("GLOBAL", OUTBOUND_GROUP_NAME).await;
+        let target_outbound = if cfg.enable_chain_proxy && has_chain_exit {
+            CHAIN_EXIT_PROXY_NAME
+        } else {
+            POOL_GROUP_NAME
+        };
         let _ = api
-            .select_proxy_group("GLOBAL", crate::subscription::POOL_GROUP_NAME)
+            .select_proxy_group(OUTBOUND_GROUP_NAME, target_outbound)
             .await;
         if let Some(cur) = self.scheduler.current_node_name() {
-            let _ = api
-                .select_proxy_group(crate::subscription::POOL_GROUP_NAME, &cur)
-                .await;
+            let _ = api.select_proxy_group(POOL_GROUP_NAME, &cur).await;
         }
 
         let (shut_tx, shut_rx) = watch::channel(false);
@@ -685,12 +718,22 @@ impl ProxyEngine {
                     }
                     _ = ticker.tick() => {
                         let Some(eng) = engine_weak.upgrade() else { break; };
-                        let mode = eng.config.read().unwrap().rotation_mode.clone();
-                        if let RotationMode::RoundRobinInterval { seconds } = mode {
-                            elapsed_secs += 1;
-                            if elapsed_secs >= seconds.max(5) {
+                        let (mode, chain_active) = {
+                            let c = eng.config.read().unwrap();
+                            (
+                                c.rotation_mode.clone(),
+                                c.enable_chain_proxy && c.chain_exit_source.is_some(),
+                            )
+                        };
+                        if !chain_active {
+                            if let RotationMode::RoundRobinInterval { seconds } = mode {
+                                elapsed_secs += 1;
+                                if elapsed_secs >= seconds.max(5) {
+                                    elapsed_secs = 0;
+                                    let _ = eng.scheduler.rotate_next("定时轮询切换").await;
+                                }
+                            } else {
                                 elapsed_secs = 0;
-                                let _ = eng.scheduler.rotate_next("定时轮询切换").await;
                             }
                         } else {
                             elapsed_secs = 0;
@@ -798,6 +841,8 @@ impl ProxyEngine {
         self.mihomo.stop().await;
         self.scheduler.set_switcher(None);
         *self.api_client.write().unwrap() = None;
+        *self.runtime_secret.write().unwrap() = None;
+        self.runtime_has_chain_exit.store(false, Ordering::SeqCst);
         let _ = sysproxy::disable_system_proxy();
         self.running.store(false, Ordering::SeqCst);
         if let Ok(mut t) = self.telemetry.write() {
@@ -828,6 +873,243 @@ impl ProxyEngine {
                 self.bus.info("系统代理已关闭");
             }
         }
+        self.bus.notify_state();
+    }
+
+    /// Regenerates `mihomo-runtime.yaml` and hot-reloads the running Mihomo instance via REST API.
+    async fn reload_mihomo_runtime(&self) -> Result<()> {
+        let api = self.api_client.read().unwrap().clone();
+        let secret = self.runtime_secret.read().unwrap().clone();
+        let (Some(api), Some(secret)) = (api, secret) else {
+            return Ok(());
+        };
+        let sub = self
+            .subscription
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| anyhow!("当前无有效订阅配置"))?;
+        let cfg = self.config.read().unwrap().clone();
+        let effective_tun = cfg.enable_tun && is_elevated();
+        let enable_mitm = self.is_ca_installed();
+
+        let has_chain_exit = cfg
+            .chain_exit_source
+            .as_ref()
+            .map(|s| resolve_chain_exit_mapping(&sub, s).is_ok())
+            .unwrap_or(false);
+        let runtime_yaml =
+            generate_mihomo_config(&sub, &cfg, &secret, enable_mitm, effective_tun)?;
+        let runtime_path = AppConfig::runtime_yaml_path();
+        fs::write(&runtime_path, runtime_yaml)?;
+
+        api.reload_config(&runtime_path).await?;
+        self.runtime_has_chain_exit
+            .store(has_chain_exit, Ordering::SeqCst);
+
+        // Re-apply outbound mode & active proxy selections after hot-reload
+        let _ = api.select_proxy_group("GLOBAL", OUTBOUND_GROUP_NAME).await;
+        let target_outbound = if cfg.enable_chain_proxy && has_chain_exit {
+            CHAIN_EXIT_PROXY_NAME
+        } else {
+            POOL_GROUP_NAME
+        };
+        let _ = api
+            .select_proxy_group(OUTBOUND_GROUP_NAME, target_outbound)
+            .await;
+        if let Some(cur) = self.scheduler.current_node_name() {
+            let _ = api.select_proxy_group(POOL_GROUP_NAME, &cur).await;
+        }
+        if cfg.outbound_mode == "direct" {
+            let _ = api.set_mode("direct").await;
+        }
+        Ok(())
+    }
+
+    pub async fn toggle_chain_proxy(self: &Arc<Self>, enabled: bool) -> Result<()> {
+        let exit_src = self.config.read().unwrap().chain_exit_source.clone();
+        if enabled {
+            let Some(ref src) = exit_src else {
+                let msg = "尚未指定固定落地节点：请先在「节点列表」点击「设为落地」，或在「429 策略」配置自定义落地";
+                self.bus.warn_429(msg);
+                return Err(anyhow!(msg));
+            };
+            if let Some(ref sub) = *self.subscription.read().unwrap() {
+                if let Err(e) = resolve_chain_exit_mapping(sub, src) {
+                    self.bus.error(format!("落地节点不可用: {}", e));
+                    return Err(e);
+                }
+            }
+        }
+
+        {
+            let mut cfg = self.config.write().unwrap();
+            cfg.enable_chain_proxy = enabled;
+        }
+        self.save_config();
+
+        if enabled {
+            if let Some(ChainExitSource::SubscriptionNode { ref name }) = exit_src {
+                self.scheduler.set_excluded_node(Some(name.clone()));
+                let _ = self.scheduler.ensure_not_excluded().await;
+            } else {
+                self.scheduler.set_excluded_node(None);
+            }
+        } else {
+            self.scheduler.set_excluded_node(None);
+        }
+
+        if self.is_running() {
+            if enabled && !self.runtime_has_chain_exit.load(Ordering::SeqCst) {
+                if let Err(e) = self.reload_mihomo_runtime().await {
+                    self.bus
+                        .error(format!("热重载链式代理配置失败（请尝试重启代理）: {}", e));
+                    return Err(e);
+                }
+            } else {
+                let api = self.api_client.read().unwrap().clone();
+                if let Some(api) = api {
+                    let target = if enabled {
+                        CHAIN_EXIT_PROXY_NAME
+                    } else {
+                        POOL_GROUP_NAME
+                    };
+                    if let Err(e) = api.select_proxy_group(OUTBOUND_GROUP_NAME, target).await {
+                        self.bus.error(format!("热切换链式代理失败: {}", e));
+                        return Err(e);
+                    }
+                }
+            }
+
+            let eng_ip = self.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(450)).await;
+                eng_ip.check_exit_ip().await;
+            });
+        }
+
+        if enabled {
+            let label = exit_src
+                .map(|s| s.short_label())
+                .unwrap_or_else(|| "未知".to_string());
+            self.bus.ok(format!(
+                "链式代理已开启：前置池 -> 固定落地 [{}]（429 不切出口 IP）",
+                label
+            ));
+        } else {
+            self.bus
+                .info("链式代理已关闭：恢复直出节点池（429 自动切换出口节点）");
+        }
+        self.bus.notify_state();
+        Ok(())
+    }
+
+    pub async fn set_chain_exit_subscription_node(
+        self: &Arc<Self>,
+        node_name: &str,
+    ) -> Result<()> {
+        let was_enabled = {
+            let mut cfg = self.config.write().unwrap();
+            cfg.chain_exit_source = Some(ChainExitSource::SubscriptionNode {
+                name: node_name.to_string(),
+            });
+            cfg.enable_chain_proxy
+        };
+        self.save_config();
+
+        if was_enabled {
+            self.scheduler.set_excluded_node(Some(node_name.to_string()));
+            let _ = self.scheduler.ensure_not_excluded().await;
+        }
+
+        if self.is_running() {
+            if let Err(e) = self.reload_mihomo_runtime().await {
+                self.bus
+                    .warn_429(format!("落地节点已保存，但热重载失败（重启代理后生效）: {}", e));
+            } else if was_enabled {
+                let eng_ip = self.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(450)).await;
+                    eng_ip.check_exit_ip().await;
+                });
+            }
+        }
+        self.bus
+            .ok(format!("已将订阅节点「{}」设为链式固定落地出口", node_name));
+        self.bus.notify_state();
+        Ok(())
+    }
+
+    pub async fn set_chain_exit_custom(
+        self: &Arc<Self>,
+        raw_spec: String,
+        backoff_ms: u64,
+    ) -> Result<()> {
+        parse_custom_exit_proxy(&raw_spec)?;
+        let was_enabled = {
+            let mut cfg = self.config.write().unwrap();
+            cfg.chain_exit_source = Some(ChainExitSource::CustomSpec {
+                raw: raw_spec.trim().to_string(),
+            });
+            cfg.chain_429_backoff_ms = backoff_ms.clamp(100, 30_000);
+            cfg.enable_chain_proxy
+        };
+        self.save_config();
+        self.scheduler.set_excluded_node(None);
+
+        if self.is_running() {
+            if let Err(e) = self.reload_mihomo_runtime().await {
+                self.bus
+                    .warn_429(format!("自定义落地已保存，但热重载失败（重启代理后生效）: {}", e));
+            } else if was_enabled {
+                let eng_ip = self.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(450)).await;
+                    eng_ip.check_exit_ip().await;
+                });
+            }
+        }
+        self.bus.ok("自定义链式落地节点已保存并生效");
+        self.bus.notify_state();
+        Ok(())
+    }
+
+    pub async fn clear_chain_exit(self: &Arc<Self>) -> Result<()> {
+        let was_enabled = {
+            let mut cfg = self.config.write().unwrap();
+            let prev = cfg.enable_chain_proxy;
+            cfg.enable_chain_proxy = false;
+            cfg.chain_exit_source = None;
+            prev
+        };
+        self.save_config();
+        self.scheduler.set_excluded_node(None);
+
+        if self.is_running() {
+            let api = self.api_client.read().unwrap().clone();
+            if let Some(api) = api {
+                let _ = api
+                    .select_proxy_group(OUTBOUND_GROUP_NAME, POOL_GROUP_NAME)
+                    .await;
+            }
+            if was_enabled {
+                let eng_ip = self.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(450)).await;
+                    eng_ip.check_exit_ip().await;
+                });
+            }
+        }
+        self.bus.info("已清除固定落地节点配置并关闭链式代理");
+        self.bus.notify_state();
+        Ok(())
+    }
+
+    pub fn update_chain_backoff_ms(&self, backoff_ms: u64) {
+        if let Ok(mut cfg) = self.config.write() {
+            cfg.chain_429_backoff_ms = backoff_ms.clamp(100, 30_000);
+        }
+        self.save_config();
         self.bus.notify_state();
     }
 

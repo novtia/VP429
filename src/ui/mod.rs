@@ -6,7 +6,7 @@ mod pages;
 mod shell;
 pub mod theme;
 
-use crate::config::RotationMode;
+use crate::config::{ChainExitSource, RotationMode};
 use crate::engine::ProxyEngine;
 use crate::ui::anim::UiAnims;
 use crate::ui::input::TextInput;
@@ -67,6 +67,8 @@ pub struct MainView {
     domains_input: Entity<TextInput>,
     cooldown_input: Entity<TextInput>,
     retries_input: Entity<TextInput>,
+    chain_exit_input: Entity<TextInput>,
+    chain_backoff_input: Entity<TextInput>,
     // System settings inputs
     local_port_input: Entity<TextInput>,
     mixed_port_input: Entity<TextInput>,
@@ -110,6 +112,19 @@ impl MainView {
         });
         let cooldown_input = cx.new(|cx| TextInput::new(cfg.cooldown_seconds.to_string(), "60", cx));
         let retries_input = cx.new(|cx| TextInput::new(cfg.max_retries.to_string(), "2", cx));
+        let initial_custom_exit = match &cfg.chain_exit_source {
+            Some(ChainExitSource::CustomSpec { raw }) => raw.clone(),
+            _ => String::new(),
+        };
+        let chain_exit_input = cx.new(|cx| {
+            TextInput::new(
+                initial_custom_exit,
+                "socks5://user:pass@host:port 或单条 Clash 节点 YAML",
+                cx,
+            )
+        });
+        let chain_backoff_input =
+            cx.new(|cx| TextInput::new(cfg.chain_429_backoff_ms.to_string(), "1500", cx));
         let local_port_input =
             cx.new(|cx| TextInput::new(cfg.local_proxy_port.to_string(), "7890", cx));
         let mixed_port_input =
@@ -175,6 +190,8 @@ impl MainView {
             domains_input,
             cooldown_input,
             retries_input,
+            chain_exit_input,
+            chain_backoff_input,
             local_port_input,
             mixed_port_input,
             tun_mitm_port_input,
@@ -322,12 +339,55 @@ impl MainView {
             let cfg = self.engine.config.read().unwrap();
             (cfg.rotation_mode.clone(), cfg.auto_retry_on_429)
         };
+        let backoff_ms: u64 = self
+            .chain_backoff_input
+            .read(cx)
+            .value()
+            .trim()
+            .parse()
+            .unwrap_or(1500);
         self.engine
             .update_rotation_policy(mode, cd, auto_retry, max_r);
+        self.engine.update_chain_backoff_ms(backoff_ms);
         if !domains.is_empty() {
             self.engine.update_watch_domains(domains);
         }
         self.engine.bus.ok("429 轮询与监听域名配置已保存");
+        cx.notify();
+    }
+
+    fn apply_custom_chain_exit(&mut self, cx: &mut Context<Self>) {
+        let raw = self.chain_exit_input.read(cx).value().trim().to_string();
+        let backoff_ms: u64 = self
+            .chain_backoff_input
+            .read(cx)
+            .value()
+            .trim()
+            .parse()
+            .unwrap_or(1500);
+        if raw.is_empty() {
+            self.engine
+                .bus
+                .error("请输入自定义落地节点（socks5://... / http://... 或单条 Clash YAML）");
+            cx.notify();
+            return;
+        }
+        let eng = self.engine.clone();
+        self.rt.spawn(async move {
+            if let Err(err) = eng.set_chain_exit_custom(raw, backoff_ms).await {
+                eng.bus.error(format!("应用自定义落地节点失败: {}", err));
+            }
+        });
+        cx.notify();
+    }
+
+    fn clear_chain_exit(&mut self, cx: &mut Context<Self>) {
+        self.chain_exit_input
+            .update(cx, |i, cx| i.set_value(String::new(), cx));
+        let eng = self.engine.clone();
+        self.rt.spawn(async move {
+            let _ = eng.clear_chain_exit().await;
+        });
         cx.notify();
     }
 
@@ -412,6 +472,7 @@ impl Render for MainView {
         let (
             sys_proxy,
             tun_on,
+            chain_on,
             auto_retry,
             allow_lan,
             profile_count,
@@ -422,6 +483,7 @@ impl Render for MainView {
             (
                 cfg.enable_system_proxy,
                 cfg.enable_tun,
+                cfg.enable_chain_proxy,
                 cfg.auto_retry_on_429,
                 cfg.allow_lan,
                 cfg.profiles.len(),
@@ -474,6 +536,8 @@ impl Render for MainView {
             .sync("tog_sysproxy", if sys_proxy { 1.0 } else { 0.0 }, 180.0);
         self.anims
             .sync("tog_tun", if tun_on { 1.0 } else { 0.0 }, 180.0);
+        self.anims
+            .sync("tog_chain", if chain_on { 1.0 } else { 0.0 }, 180.0);
         self.anims
             .sync("tog_retry", if auto_retry { 1.0 } else { 0.0 }, 180.0);
         self.anims

@@ -41,6 +41,22 @@ pub struct SubscriptionProfile {
     pub expire_unix: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChainExitSource {
+    SubscriptionNode { name: String },
+    CustomSpec { raw: String },
+}
+
+impl ChainExitSource {
+    pub fn short_label(&self) -> String {
+        match self {
+            ChainExitSource::SubscriptionNode { name } => name.clone(),
+            ChainExitSource::CustomSpec { .. } => "自定义落地".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -56,6 +72,9 @@ pub struct AppConfig {
     pub mihomo_api_port: u16,
     pub enable_system_proxy: bool,
     pub enable_tun: bool,
+    pub enable_chain_proxy: bool,
+    pub chain_exit_source: Option<ChainExitSource>,
+    pub chain_429_backoff_ms: u64,
     pub rotation_mode: RotationMode,
     pub cooldown_seconds: u64,
     pub auto_retry_on_429: bool,
@@ -83,6 +102,9 @@ impl Default for AppConfig {
             mihomo_api_port: 19090,
             enable_system_proxy: true,
             enable_tun: false,
+            enable_chain_proxy: false,
+            chain_exit_source: None,
+            chain_429_backoff_ms: 1500,
             rotation_mode: RotationMode::On429Only,
             cooldown_seconds: 60,
             auto_retry_on_429: true,

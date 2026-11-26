@@ -1,4 +1,4 @@
-use crate::config::AppConfig;
+use crate::config::{AppConfig, ChainExitSource};
 use anyhow::{anyhow, Context, Result};
 use serde_yaml::{Mapping, Value};
 use std::collections::HashMap;
@@ -6,6 +6,8 @@ use std::fs;
 use std::time::Duration;
 
 pub const POOL_GROUP_NAME: &str = "VERTEX-POOL";
+pub const OUTBOUND_GROUP_NAME: &str = "VERTEX-OUTBOUND";
+pub const CHAIN_EXIT_PROXY_NAME: &str = "VERTEX-CHAIN-EXIT";
 pub const MITM_PROXY_NAME: &str = "RUST-429-MITM";
 
 #[derive(Debug, Clone)]
@@ -283,10 +285,164 @@ pub fn parse_clash_yaml(yaml_text: &str) -> Result<ParsedSubscription> {
     })
 }
 
+/// Parses a user-supplied custom landing/exit proxy specification.
+/// Supports:
+/// 1. Proxy URLs: `socks5://[user:pass@]host:port`, `socks5h://...`, `http://...`, `https://...`
+/// 2. A single Clash/Mihomo YAML proxy mapping (or 1-element YAML sequence).
+pub fn parse_custom_exit_proxy(raw: &str) -> Result<Mapping> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("自定义落地节点不能为空"));
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    let url_scheme = if lower.starts_with("socks5://") {
+        Some(("socks5", false, 9usize))
+    } else if lower.starts_with("socks5h://") {
+        Some(("socks5", false, 10usize))
+    } else if lower.starts_with("http://") {
+        Some(("http", false, 7usize))
+    } else if lower.starts_with("https://") {
+        Some(("http", true, 8usize))
+    } else {
+        None
+    };
+
+    if let Some((proxy_type, use_tls, prefix_len)) = url_scheme {
+        let rest = trimmed[prefix_len..].trim_end_matches('/');
+        let (auth_part, host_port) = match rest.rsplit_once('@') {
+            Some((a, hp)) => (Some(a), hp),
+            None => (None, rest),
+        };
+        let (host, port_str) = if let Some(after_bracket) = host_port.strip_prefix('[') {
+            let (h, p) = after_bracket
+                .split_once("]:")
+                .ok_or_else(|| anyhow!("无效的 IPv6 代理地址，格式应为 [::1]:port"))?;
+            (h, p)
+        } else {
+            host_port
+                .rsplit_once(':')
+                .ok_or_else(|| anyhow!("代理地址缺少端口，格式应为 host:port"))?
+        };
+        let port: u16 = port_str
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("无效的端口号: {}", port_str))?;
+        if host.trim().is_empty() || port == 0 {
+            return Err(anyhow!("代理主机或端口无效"));
+        }
+
+        let mut map = Mapping::new();
+        map.insert(
+            Value::String("name".into()),
+            Value::String(CHAIN_EXIT_PROXY_NAME.into()),
+        );
+        map.insert(
+            Value::String("type".into()),
+            Value::String(proxy_type.into()),
+        );
+        map.insert(
+            Value::String("server".into()),
+            Value::String(host.trim().into()),
+        );
+        map.insert(Value::String("port".into()), Value::Number(port.into()));
+        if use_tls {
+            map.insert(Value::String("tls".into()), Value::Bool(true));
+        }
+        if let Some(auth) = auth_part {
+            let (user, pass) = match auth.split_once(':') {
+                Some((u, p)) => (u, Some(p)),
+                None => (auth, None),
+            };
+            let dec_user = urlencoding::decode(user)
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| user.to_string());
+            if !dec_user.is_empty() {
+                map.insert(
+                    Value::String("username".into()),
+                    Value::String(dec_user),
+                );
+            }
+            if let Some(p) = pass {
+                let dec_pass = urlencoding::decode(p)
+                    .map(|c| c.into_owned())
+                    .unwrap_or_else(|_| p.to_string());
+                map.insert(
+                    Value::String("password".into()),
+                    Value::String(dec_pass),
+                );
+            }
+        }
+        return Ok(map);
+    }
+
+    let val: Value = serde_yaml::from_str(trimmed).context(
+        "解析自定义落地节点失败，请输入 socks5://... / http://... 或单条 Clash 节点 YAML",
+    )?;
+    let map = if let Some(seq) = val.as_sequence() {
+        if seq.len() != 1 {
+            return Err(anyhow!("YAML 列表仅支持填写单个落地节点"));
+        }
+        seq[0]
+            .as_mapping()
+            .cloned()
+            .ok_or_else(|| anyhow!("YAML 列表项不是有效的节点对象"))?
+    } else {
+        val.as_mapping()
+            .cloned()
+            .ok_or_else(|| anyhow!("自定义落地节点必须是代理 URL 或 Clash YAML 节点映射"))?
+    };
+
+    let has_type = map
+        .get(Value::String("type".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let has_server = map
+        .get(Value::String("server".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    let has_port = map
+        .get(Value::String("port".into()))
+        .and_then(|v| {
+            v.as_u64()
+                .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+        })
+        .map(|p| p > 0)
+        .unwrap_or(false);
+    if !has_type || !has_server || !has_port {
+        return Err(anyhow!("Clash 节点 YAML 必须包含有效的 type、server 与 port 字段"));
+    }
+    Ok(map)
+}
+
+pub fn resolve_chain_exit_mapping(
+    sub: &ParsedSubscription,
+    src: &ChainExitSource,
+) -> Result<Mapping> {
+    match src {
+        ChainExitSource::SubscriptionNode { name } => sub
+            .raw_proxies
+            .iter()
+            .filter_map(|v| v.as_mapping())
+            .find(|m| {
+                m.get(Value::String("name".into()))
+                    .and_then(|v| v.as_str())
+                    == Some(name.as_str())
+            })
+            .cloned()
+            .ok_or_else(|| anyhow!("当前订阅中未找到落地节点「{}」", name)),
+        ChainExitSource::CustomSpec { raw } => parse_custom_exit_proxy(raw),
+    }
+}
+
 /// Generates a loop-free mihomo runtime YAML configuration:
 /// - `mixed-port` (`17890`) handles normal rules
-/// - Dedicated HTTP `listeners` (`17892`) binds directly to `proxy: VERTEX-POOL`, bypassing `rules`
+/// - Dedicated HTTP `listeners` (`17892`) binds directly to `proxy: VERTEX-OUTBOUND`, bypassing `rules`
 ///   so decrypted traffic from our Rust MITM server never loops back into `RUST-429-MITM`.
+/// - `VERTEX-OUTBOUND` hot-switches between `VERTEX-POOL` (direct rotation) and `VERTEX-CHAIN-EXIT`
+///   (fixed exit node dialing through `VERTEX-POOL`).
 /// - Watch domains route to `RUST-429-MITM` (`127.0.0.1:17891`) when coming from TUN or `mixed-port`.
 pub fn generate_mihomo_config(
     sub: &ParsedSubscription,
@@ -420,7 +576,7 @@ pub fn generate_mihomo_config(
     );
     root.insert(Value::String("tun".into()), Value::Mapping(tun));
 
-    // Loop-free bypass listener directly targeting VERTEX-POOL
+    // Loop-free bypass listener directly targeting VERTEX-OUTBOUND
     let mut bypass_listener = Mapping::new();
     bypass_listener.insert(
         Value::String("name".into()),
@@ -437,15 +593,30 @@ pub fn generate_mihomo_config(
     );
     bypass_listener.insert(
         Value::String("proxy".into()),
-        Value::String(POOL_GROUP_NAME.into()),
+        Value::String(OUTBOUND_GROUP_NAME.into()),
     );
     root.insert(
         Value::String("listeners".into()),
         Value::Sequence(vec![Value::Mapping(bypass_listener)]),
     );
 
-    // Proxies = subscription proxies + internal RUST-429-MITM loopback proxy
+    // Proxies = subscription proxies + optional VERTEX-CHAIN-EXIT (dialer-proxy: VERTEX-POOL) + RUST-429-MITM
     let mut proxies = sub.raw_proxies.clone();
+    let mut has_chain_exit = false;
+    if let Some(ref src) = cfg.chain_exit_source {
+        if let Ok(mut exit_map) = resolve_chain_exit_mapping(sub, src) {
+            exit_map.insert(
+                Value::String("name".into()),
+                Value::String(CHAIN_EXIT_PROXY_NAME.into()),
+            );
+            exit_map.insert(
+                Value::String("dialer-proxy".into()),
+                Value::String(POOL_GROUP_NAME.into()),
+            );
+            proxies.push(Value::Mapping(exit_map));
+            has_chain_exit = true;
+        }
+    }
     let mut mitm_proxy = Mapping::new();
     mitm_proxy.insert(
         Value::String("name".into()),
@@ -463,7 +634,37 @@ pub fn generate_mihomo_config(
     proxies.push(Value::Mapping(mitm_proxy));
     root.insert(Value::String("proxies".into()), Value::Sequence(proxies));
 
-    // Proxy group: VERTEX-POOL
+    // Top-level Outbound group: VERTEX-OUTBOUND (hot-switches between VERTEX-POOL and VERTEX-CHAIN-EXIT)
+    let mut outbound_group = Mapping::new();
+    outbound_group.insert(
+        Value::String("name".into()),
+        Value::String(OUTBOUND_GROUP_NAME.into()),
+    );
+    outbound_group.insert(
+        Value::String("type".into()),
+        Value::String("select".into()),
+    );
+    let outbound_choices = if has_chain_exit {
+        if cfg.enable_chain_proxy {
+            vec![
+                Value::String(CHAIN_EXIT_PROXY_NAME.into()),
+                Value::String(POOL_GROUP_NAME.into()),
+            ]
+        } else {
+            vec![
+                Value::String(POOL_GROUP_NAME.into()),
+                Value::String(CHAIN_EXIT_PROXY_NAME.into()),
+            ]
+        }
+    } else {
+        vec![Value::String(POOL_GROUP_NAME.into())]
+    };
+    outbound_group.insert(
+        Value::String("proxies".into()),
+        Value::Sequence(outbound_choices),
+    );
+
+    // Proxy group: VERTEX-POOL (front-end relay pool / direct rotation pool)
     let mut pool_group = Mapping::new();
     pool_group.insert(
         Value::String("name".into()),
@@ -484,10 +685,13 @@ pub fn generate_mihomo_config(
     );
     root.insert(
         Value::String("proxy-groups".into()),
-        Value::Sequence(vec![Value::Mapping(pool_group)]),
+        Value::Sequence(vec![
+            Value::Mapping(outbound_group),
+            Value::Mapping(pool_group),
+        ]),
     );
 
-    // Rules: watch domains -> RUST-429-MITM, local -> DIRECT, rest -> VERTEX-POOL
+    // Rules: watch domains -> RUST-429-MITM, local -> DIRECT, rest -> VERTEX-OUTBOUND
     let mut rules = vec![
         Value::String("IP-CIDR,127.0.0.0/8,DIRECT,no-resolve".into()),
         Value::String("IP-CIDR,192.168.0.0/16,DIRECT,no-resolve".into()),
@@ -534,7 +738,7 @@ pub fn generate_mihomo_config(
             }
         }
     }
-    rules.push(Value::String(format!("MATCH,{}", POOL_GROUP_NAME)));
+    rules.push(Value::String(format!("MATCH,{}", OUTBOUND_GROUP_NAME)));
     root.insert(Value::String("rules".into()), Value::Sequence(rules));
 
     serde_yaml::to_string(&Value::Mapping(root)).context("序列化 mihomo 运行配置失败")
@@ -577,10 +781,58 @@ proxies:
 
         assert!(runtime_yaml.contains("vertex-bypass"));
         assert!(runtime_yaml.contains("port: 17892"));
-        assert!(runtime_yaml.contains("proxy: VERTEX-POOL"));
+        assert!(runtime_yaml.contains("proxy: VERTEX-OUTBOUND"));
         assert!(runtime_yaml.contains("RUST-429-MITM"));
         assert!(runtime_yaml.contains("alias.example.net: real.example.net"));
         assert!(runtime_yaml.contains("DOMAIN-SUFFIX,aiplatform.googleapis.com,RUST-429-MITM"));
-        assert!(runtime_yaml.contains("MATCH,VERTEX-POOL"));
+        assert!(runtime_yaml.contains("MATCH,VERTEX-OUTBOUND"));
+    }
+
+    #[test]
+    fn test_chain_proxy_subscription_and_custom_exit() {
+        let parsed = parse_clash_yaml(SAMPLE_CLASH_YAML).unwrap();
+        let mut cfg = AppConfig::default();
+        cfg.enable_chain_proxy = true;
+        cfg.chain_exit_source = Some(ChainExitSource::SubscriptionNode {
+            name: "JP-Tokyo-02".into(),
+        });
+
+        let yaml = generate_mihomo_config(&parsed, &cfg, "sec", false, false).unwrap();
+        assert!(yaml.contains("name: VERTEX-CHAIN-EXIT"));
+        assert!(yaml.contains("dialer-proxy: VERTEX-POOL"));
+        assert!(yaml.contains("server: 203.0.113.20"));
+
+        // Custom socks5 URL with credentials
+        let socks_map = parse_custom_exit_proxy("socks5://alice:s3cr3t@198.51.100.7:1080").unwrap();
+        assert_eq!(
+            socks_map.get(Value::String("type".into())).and_then(|v| v.as_str()),
+            Some("socks5")
+        );
+        assert_eq!(
+            socks_map.get(Value::String("server".into())).and_then(|v| v.as_str()),
+            Some("198.51.100.7")
+        );
+        assert_eq!(
+            socks_map.get(Value::String("port".into())).and_then(|v| v.as_u64()),
+            Some(1080)
+        );
+        assert_eq!(
+            socks_map.get(Value::String("username".into())).and_then(|v| v.as_str()),
+            Some("alice")
+        );
+
+        // Custom single Clash YAML node
+        let yaml_map = parse_custom_exit_proxy(
+            "{name: MyHome, type: vless, server: home.example.com, port: 443, uuid: abc}",
+        )
+        .unwrap();
+        assert_eq!(
+            yaml_map.get(Value::String("type".into())).and_then(|v| v.as_str()),
+            Some("vless")
+        );
+        assert_eq!(
+            yaml_map.get(Value::String("server".into())).and_then(|v| v.as_str()),
+            Some("home.example.com")
+        );
     }
 }

@@ -35,14 +35,14 @@ fn main() {
     Application::new()
         .with_assets(ui::icons::EmbeddedAssets)
         .run(move |cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(860.0), px(560.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1040.0), px(670.0)), cx);
         let engine_clone = engine.clone();
         let rt_clone = rt_handle.clone();
 
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(860.0), px(560.0))),
+                window_min_size: Some(size(px(1040.0), px(670.0))),
                 is_resizable: false,
                 is_minimizable: true,
                 titlebar: Some(TitlebarOptions {

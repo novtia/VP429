@@ -110,6 +110,25 @@ impl MihomoApiClient {
         Ok(())
     }
 
+    pub async fn reload_config(&self, config_path: &Path) -> Result<()> {
+        let url = format!("{}/configs?force=true", self.base_url);
+        let body = serde_json::json!({ "path": config_path.to_string_lossy() });
+        let mut req = self.client.put(&url).json(&body);
+        if !self.secret.is_empty() {
+            req = req.bearer_auth(&self.secret);
+        }
+        let resp = req
+            .send()
+            .await
+            .context("调用 Mihomo API 热重载配置失败")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("Mihomo 热重载配置失败 ({}): {}", status, text));
+        }
+        Ok(())
+    }
+
     pub fn traffic_url(&self) -> String {
         format!("{}/traffic", self.base_url)
     }

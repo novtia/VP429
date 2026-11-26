@@ -1,3 +1,4 @@
+use crate::config::ChainExitSource;
 use crate::state::LogLevel;
 use crate::ui::anim::{render_loading_bars, render_shimmer_band};
 use crate::ui::flags::{detect_country, render_flag};
@@ -10,9 +11,18 @@ impl MainView {
         let snap = self.engine.scheduler.snapshot();
         let is_testing = self.engine.is_testing_latency();
         let latest_log = self.engine.bus.snapshot_logs().pop();
+        let chain_exit_sub_name = {
+            let cfg = self.engine.config.read().unwrap();
+            match &cfg.chain_exit_source {
+                Some(ChainExitSource::SubscriptionNode { name }) => Some(name.clone()),
+                _ => None,
+            }
+        };
 
         let node_rows = snap.nodes.into_iter().enumerate().map(|(idx, n)| {
             let node_name_click = n.name.clone();
+            let node_name_exit = n.name.clone();
+            let is_chain_exit = chain_exit_sub_name.as_deref() == Some(n.name.as_str());
             let country = detect_country(&n.name);
             let status_text = if n.cooldown_remaining_secs > 0 {
                 format!("429 冷却 {}s", n.cooldown_remaining_secs)
@@ -109,7 +119,62 @@ impl MainView {
                     div()
                         .flex()
                         .items_center()
-                        .gap_5()
+                        .gap_4()
+                        .child(
+                            div()
+                                .id(("node-set-exit", idx))
+                                .px_2()
+                                .py(px(2.0))
+                                .rounded(px(3.5))
+                                .border_1()
+                                .border_color(if is_chain_exit {
+                                    theme::braun_orange()
+                                } else {
+                                    theme::border_color()
+                                })
+                                .bg(if is_chain_exit {
+                                    theme::braun_orange()
+                                } else {
+                                    theme::btn_bg()
+                                })
+                                .hover(|s| {
+                                    s.bg(if is_chain_exit {
+                                        theme::braun_orange_border()
+                                    } else {
+                                        theme::btn_hover()
+                                    })
+                                })
+                                .cursor_pointer()
+                                .text_size(px(10.5))
+                                .font_weight(if is_chain_exit {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .text_color(if is_chain_exit {
+                                    theme::white()
+                                } else {
+                                    theme::ink_secondary()
+                                })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        let eng = this.engine.clone();
+                                        let name = node_name_exit.clone();
+                                        this.rt.spawn(async move {
+                                            if is_chain_exit {
+                                                let _ = eng.clear_chain_exit().await;
+                                            } else {
+                                                let _ =
+                                                    eng.set_chain_exit_subscription_node(&name).await;
+                                            }
+                                        });
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(if is_chain_exit { "★ 落地" } else { "设为落地" }),
+                        )
                         .child(
                             div()
                                 .text_color(if n.cooldown_remaining_secs > 0 {

@@ -29,7 +29,7 @@ impl StageGeom {
     fn compute(w: f32, h: f32) -> Self {
         let cx = w * 0.5;
         let cy = h * 0.5;
-        let r_cut = (h * 0.33).min(w * 0.228).max(108.0);
+        let r_cut = (h * 0.36).min(w * 0.255).max(120.0);
         let r_dial = r_cut - 11.0;
         let gap = 10.0;
 
@@ -255,6 +255,149 @@ fn paint_arc(
     }
     if let Ok(path) = b.build() {
         window.paint_path(path, color);
+    }
+}
+
+/// Paints a true circular aperture mask ring + curved right-edge arc scrollbar
+/// over the circular node picker.
+fn paint_picker_circle_mask(
+    bounds: Bounds<Pixels>,
+    scroll_frac: f32,
+    thumb_frac: f32,
+    has_scroll: bool,
+    window: &mut Window,
+) {
+    let ox: f32 = bounds.origin.x.into();
+    let oy: f32 = bounds.origin.y.into();
+    let w: f32 = bounds.size.width.into();
+    let h: f32 = bounds.size.height.into();
+    let cx = ox + w * 0.5;
+    let cy = oy + h * 0.5;
+    let r = w.min(h) * 0.5;
+
+    let mask_w = 18.0;
+    let r_aperture = (r - mask_w).max(10.0);
+    paint_arc(
+        window,
+        cx,
+        cy,
+        r_aperture + mask_w * 0.5,
+        0.0,
+        PI * 2.0 + 0.04,
+        mask_w + 1.5,
+        rgb(0x161715),
+    );
+    paint_arc(
+        window,
+        cx,
+        cy,
+        r_aperture,
+        0.0,
+        PI * 2.0 + 0.04,
+        1.0,
+        rgba(0xffffff10),
+    );
+
+    // Curved arc scrollbar along the right rim (-36° .. +36°)
+    if has_scroll {
+        let sb_start = -36.0 * PI / 180.0;
+        let sb_end = 36.0 * PI / 180.0;
+        let sb_sweep = sb_end - sb_start;
+        let r_sb = r - 9.0;
+        paint_arc(window, cx, cy, r_sb, sb_start, sb_end, 3.2, rgb(0x282a26));
+        let tf = thumb_frac.clamp(0.14, 1.0);
+        let sf = scroll_frac.clamp(0.0, 1.0);
+        let thumb_sweep = sb_sweep * tf;
+        let t_start = sb_start + sf * (sb_sweep - thumb_sweep);
+        paint_arc(
+            window,
+            cx,
+            cy,
+            r_sb,
+            t_start,
+            t_start + thumb_sweep,
+            3.2,
+            rgba(0xffffffcc),
+        );
+    }
+}
+
+/// Paints 4 concave corner-fillet masks over the scrollable list container so its
+/// 4 corners are truly clipped to smooth `radius` circular arcs (like CSS `border-radius` + `overflow: hidden`).
+fn paint_rounded_container_mask(bounds: Bounds<Pixels>, radius: f32, window: &mut Window) {
+    let x0: f32 = bounds.origin.x.into();
+    let y0: f32 = bounds.origin.y.into();
+    let w: f32 = bounds.size.width.into();
+    let h: f32 = bounds.size.height.into();
+    let x1 = x0 + w;
+    let y1 = y0 + h;
+    let r = radius.min(w * 0.5).min(h * 0.5);
+    let bg = rgb(0x161715);
+    let pt = |x: f32, y: f32| point(px(x), px(y));
+    let rad = point(px(r), px(r));
+
+    // Top-left corner mask
+    let mut tl = PathBuilder::fill();
+    tl.move_to(pt(x0 - 1.0, y0 - 1.0));
+    tl.line_to(pt(x0 + r, y0 - 1.0));
+    tl.line_to(pt(x0 + r, y0));
+    tl.arc_to(rad, px(0.0), false, false, pt(x0, y0 + r));
+    tl.line_to(pt(x0 - 1.0, y0 + r));
+    tl.close();
+    if let Ok(p) = tl.build() {
+        window.paint_path(p, bg);
+    }
+
+    // Top-right corner mask
+    let mut tr = PathBuilder::fill();
+    tr.move_to(pt(x1 + 1.0, y0 - 1.0));
+    tr.line_to(pt(x1 + 1.0, y0 + r));
+    tr.line_to(pt(x1, y0 + r));
+    tr.arc_to(rad, px(0.0), false, false, pt(x1 - r, y0));
+    tr.line_to(pt(x1 - r, y0 - 1.0));
+    tr.close();
+    if let Ok(p) = tr.build() {
+        window.paint_path(p, bg);
+    }
+
+    // Bottom-right corner mask
+    let mut br = PathBuilder::fill();
+    br.move_to(pt(x1 + 1.0, y1 + 1.0));
+    br.line_to(pt(x1 - r, y1 + 1.0));
+    br.line_to(pt(x1 - r, y1));
+    br.arc_to(rad, px(0.0), false, false, pt(x1, y1 - r));
+    br.line_to(pt(x1 + 1.0, y1 - r));
+    br.close();
+    if let Ok(p) = br.build() {
+        window.paint_path(p, bg);
+    }
+
+    // Bottom-left corner mask
+    let mut bl = PathBuilder::fill();
+    bl.move_to(pt(x0 - 1.0, y1 + 1.0));
+    bl.line_to(pt(x0 - 1.0, y1 - r));
+    bl.line_to(pt(x0, y1 - r));
+    bl.arc_to(rad, px(0.0), false, false, pt(x0 + r, y1));
+    bl.line_to(pt(x0 + r, y1 + 1.0));
+    bl.close();
+    if let Ok(p) = bl.build() {
+        window.paint_path(p, bg);
+    }
+
+    // Crisp 1px rounded-rect hairline framing the masked viewport
+    let mut border = PathBuilder::stroke(px(1.0));
+    border.move_to(pt(x0 + r, y0));
+    border.line_to(pt(x1 - r, y0));
+    border.arc_to(rad, px(0.0), false, true, pt(x1, y0 + r));
+    border.line_to(pt(x1, y1 - r));
+    border.arc_to(rad, px(0.0), false, true, pt(x1 - r, y1));
+    border.line_to(pt(x0 + r, y1));
+    border.arc_to(rad, px(0.0), false, true, pt(x0, y1 - r));
+    border.line_to(pt(x0, y0 + r));
+    border.arc_to(rad, px(0.0), false, true, pt(x0 + r, y0));
+    border.close();
+    if let Ok(p) = border.build() {
+        window.paint_path(p, rgba(0xffffff16));
     }
 }
 
@@ -529,8 +672,8 @@ impl MainView {
 
         // Full-height sculpted stage (no bottom black bar!)
         let sidebar_w = self.anims.get("sidebar_w", 192.0);
-        let stage_w = (860.0 - sidebar_w - 32.0).max(580.0);
-        let stage_h = 492.0;
+        let stage_w = (1040.0 - sidebar_w - 32.0).max(700.0);
+        let stage_h = 602.0;
         let g = StageGeom::compute(stage_w, stage_h);
 
         let left_body_w = (g.cx - g.r_cut).max(168.0);
@@ -562,6 +705,14 @@ impl MainView {
         let p_tun = self
             .anims
             .get("tog_tun", if cfg.enable_tun { 1.0 } else { 0.0 });
+        let p_chain = self
+            .anims
+            .get("tog_chain", if cfg.enable_chain_proxy { 1.0 } else { 0.0 });
+        let chain_active = cfg.enable_chain_proxy && cfg.chain_exit_source.is_some();
+        let chain_sub_label = match &cfg.chain_exit_source {
+            Some(src) => format!("落地: {}", src.short_label()),
+            None => "未指定落地".to_string(),
+        };
         let p_out_rule = self
             .anims
             .get("out_rule", if tel.outbound_mode == "rule" { 1.0 } else { 0.0 });
@@ -813,7 +964,8 @@ impl MainView {
                     .child(lbl)
             });
 
-        // Reusable recessed digital-watch LCD node selector window (inside upper dial aperture)
+        // Reusable recessed digital-watch LCD node selector window (fits strictly between 100K and 10M labels)
+        let node_win_max_w = (inner_well_d * 0.51 - 52.0).clamp(112.0, 146.0);
         let render_lcd_node_window = |id: &'static str, cx: &mut Context<Self>| {
             let dot_color = if running {
                 theme::lcd_green()
@@ -822,9 +974,9 @@ impl MainView {
             };
             div()
                 .id(id)
-                .px_2p5()
-                .py(px(3.5))
-                .max_w(px((inner_well_d * 0.66).min(176.0)))
+                .px_1p5()
+                .py(px(3.0))
+                .max_w(px(node_win_max_w))
                 .rounded(px(5.0))
                 .bg(rgb(0x111311))
                 .border_1()
@@ -834,21 +986,37 @@ impl MainView {
                 .cursor_pointer()
                 .flex()
                 .items_center()
-                .gap_1p5()
+                .gap_1()
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
                         this.toggle_node_picker(true, cx);
                     }),
                 )
-                .child(
-                    div()
-                        .w(px(5.5))
-                        .h(px(5.5))
-                        .rounded_full()
-                        .flex_shrink_0()
-                        .bg(dot_color),
-                )
+                .when(!chain_active, |el| {
+                    el.child(
+                        div()
+                            .w(px(5.0))
+                            .h(px(5.0))
+                            .rounded_full()
+                            .flex_shrink_0()
+                            .bg(dot_color),
+                    )
+                })
+                .when(chain_active, |el| {
+                    el.child(
+                        div()
+                            .px(px(3.0))
+                            .py(px(0.5))
+                            .rounded(px(2.5))
+                            .bg(theme::braun_orange())
+                            .text_size(px(8.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(theme::white())
+                            .flex_shrink_0()
+                            .child("前置"),
+                    )
+                })
                 .when(snap.active_node.is_some(), |el| {
                     el.child(render_flag(active_country))
                 })
@@ -856,16 +1024,17 @@ impl MainView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .text_size(px(10.5))
+                        .text_size(px(10.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme::lcd_text())
                         .overflow_hidden()
+                        .text_ellipsis()
                         .whitespace_nowrap()
                         .child(active_name.clone()),
                 )
                 .child(
                     div()
-                        .text_size(px(10.0))
+                        .text_size(px(9.5))
                         .text_color(theme::lcd_green())
                         .flex_shrink_0()
                         .whitespace_nowrap()
@@ -873,15 +1042,33 @@ impl MainView {
                 )
                 .child(
                     div()
-                        .text_size(px(9.0))
+                        .text_size(px(8.5))
                         .text_color(theme::lcd_muted())
                         .flex_shrink_0()
                         .child("▾"),
                 )
         };
 
-        // Circular Node Picker rows (dark LCD style inside circular dial well)
+        // Circular Node Picker rows: each row's width dynamically follows the circle's chord!
         let picker_visible = self.show_node_picker || picker_slide > 0.01;
+        let picker_offset_y: f32 = self.picker_scroll.offset().y.into();
+        let picker_max_y: f32 = self.picker_scroll.max_offset().height.into();
+        let picker_view_h: f32 = self.picker_scroll.bounds().size.height.into();
+        let picker_has_scroll = picker_max_y > 1.0 && picker_view_h > 1.0;
+        let picker_scroll_frac = if picker_has_scroll {
+            (-picker_offset_y / picker_max_y).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let picker_thumb_frac = if picker_has_scroll {
+            (picker_view_h / (picker_view_h + picker_max_y)).clamp(0.14, 1.0)
+        } else {
+            1.0
+        };
+
+        let picker_row_h = 30.0_f32;
+        let picker_row_gap = 4.0_f32;
+
         let picker_rows: Vec<_> = if picker_visible {
             snap.nodes
                 .iter()
@@ -895,11 +1082,14 @@ impl MainView {
                         Some(ms) => (format!("{}ms", ms), theme::lcd_muted()),
                         None => ("--".to_string(), theme::lcd_muted()),
                     };
+
                     div()
                         .id(("circ-picker-node", idx))
+                        .w_full()
+                        .h(px(picker_row_h))
+                        .flex_shrink_0()
                         .px_2p5()
-                        .py_1p5()
-                        .rounded(px(5.0))
+                        .rounded(px(6.0))
                         .border_1()
                         .border_color(if n.is_active {
                             theme::braun_orange()
@@ -953,6 +1143,8 @@ impl MainView {
                                 .child(render_flag(country))
                                 .child(
                                     div()
+                                        .flex_1()
+                                        .min_w_0()
                                         .text_size(px(11.0))
                                         .font_weight(if n.is_active {
                                             FontWeight::SEMIBOLD
@@ -965,6 +1157,7 @@ impl MainView {
                                             theme::lcd_text()
                                         })
                                         .overflow_hidden()
+                                        .text_ellipsis()
                                         .whitespace_nowrap()
                                         .child(n.name.clone()),
                                 ),
@@ -1035,62 +1228,7 @@ impl MainView {
             "速度盘"
         };
 
-        // Custom sleek draggable white scrollbar for the circular node picker
-        let circ_scrollbar = {
-            let handle = &self.picker_scroll;
-            let max_y: f32 = handle.max_offset().height.into();
-            let view_h: f32 = handle.bounds().size.height.into();
-            let is_dragging = self
-                .dragging_scroll
-                .as_ref()
-                .map(|(drag_id, _)| *drag_id == "sb-circ-picker")
-                .unwrap_or(false);
-
-            if max_y <= 1.0 || view_h <= 1.0 {
-                div().w(px(6.0)).h_full().flex_shrink_0().into_any_element()
-            } else {
-                let offset_y: f32 = handle.offset().y.into();
-                let cur_y = (-offset_y).clamp(0.0, max_y);
-                let total_h = view_h + max_y;
-                let thumb_h = ((view_h / total_h) * view_h).max(22.0).min(view_h - 4.0);
-                let travel = (view_h - thumb_h - 4.0).max(0.0);
-                let thumb_top = 2.0 + (cur_y / max_y) * travel;
-                let handle_down = handle.clone();
-
-                div()
-                    .id("sb-circ-picker")
-                    .relative()
-                    .w(px(8.0))
-                    .h_full()
-                    .flex_shrink_0()
-                    .rounded_full()
-                    .bg(rgb(0x232522))
-                    .cursor(CursorStyle::ResizeUpDown)
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, ev: &MouseDownEvent, _, cx| {
-                            Self::apply_scroll_drag(&handle_down, ev.position.y);
-                            this.dragging_scroll = Some(("sb-circ-picker", handle_down.clone()));
-                            cx.notify();
-                        }),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(1.5))
-                            .right(px(1.5))
-                            .top(px(thumb_top))
-                            .h(px(thumb_h))
-                            .rounded_full()
-                            .bg(if is_dragging {
-                                theme::white()
-                            } else {
-                                rgba(0xffffffcc)
-                            }),
-                    )
-                    .into_any_element()
-            }
-        };
+        // (Curved arc scrollbar is now painted inside paint_picker_circle_mask)
 
         // Full-Height Sculpted Instrument Stage
         div()
@@ -1138,12 +1276,12 @@ impl MainView {
                         div()
                             .flex()
                             .flex_col()
-                            .gap_2p5()
+                            .gap_1p5()
                             .child(
                                 div()
                                     .id("dash-card-sysproxy")
                                     .px_1p5()
-                                    .py_1()
+                                    .py(px(2.5))
                                     .mx(px(-6.0))
                                     .rounded(px(5.0))
                                     .hover(|s| s.bg(theme::row_hover_bg()))
@@ -1190,7 +1328,7 @@ impl MainView {
                                 div()
                                     .id("dash-card-tun")
                                     .px_1p5()
-                                    .py_1()
+                                    .py(px(2.5))
                                     .mx(px(-6.0))
                                     .rounded(px(5.0))
                                     .hover(|s| s.bg(theme::row_hover_bg()))
@@ -1298,6 +1436,61 @@ impl MainView {
                                             ),
                                     )
                                     .child(render_pill_toggle(p_tun, 0xe84c1e)),
+                            )
+                            .child(div().h(px(1.0)).w_full().bg(theme::divider_color()))
+                            .child(
+                                div()
+                                    .id("dash-card-chain")
+                                    .px_1p5()
+                                    .py(px(2.5))
+                                    .mx(px(-6.0))
+                                    .rounded(px(5.0))
+                                    .hover(|s| s.bg(theme::row_hover_bg()))
+                                    .active(|s| s.bg(theme::sidebar_active()))
+                                    .cursor_pointer()
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_1p5()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            let eng = this.engine.clone();
+                                            let next = !cfg.enable_chain_proxy;
+                                            this.rt.spawn(async move {
+                                                let _ = eng.toggle_chain_proxy(next).await;
+                                            });
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(theme::ink_primary())
+                                                    .child("链式代理"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.0))
+                                                    .text_color(if chain_active {
+                                                        theme::braun_orange()
+                                                    } else {
+                                                        theme::ink_muted()
+                                                    })
+                                                    .overflow_hidden()
+                                                    .whitespace_nowrap()
+                                                    .child(chain_sub_label),
+                                            ),
+                                    )
+                                    .child(render_pill_toggle(p_chain, 0xe84c1e)),
                             ),
                     ),
             )
@@ -1806,12 +1999,20 @@ impl MainView {
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(if running {
+                                    .text_color(if running && chain_active {
+                                        theme::braun_orange()
+                                    } else if running {
                                         theme::status_green()
                                     } else {
                                         theme::ink_muted()
                                     })
-                                    .child(if running { "● 连通" } else { "○ 待机" }),
+                                    .child(if running && chain_active {
+                                        "● 链式锁定"
+                                    } else if running {
+                                        "● 连通"
+                                    } else {
+                                        "○ 待机"
+                                    }),
                             ),
                     ),
             )
@@ -2177,8 +2378,9 @@ impl MainView {
                                         ),
                                 )
                             })
-                            // LAYER 3: Circular Shutter Node Picker (stays 100% circular inside dial well)
+                            // LAYER 3: Circular Shutter Node Picker (true circular mask aperture inside dial well)
                             .when(picker_visible, |el| {
+                                let header_top = 20.0 - (1.0 - picker_slide) * 14.0;
                                 el.child(
                                     div()
                                         .id("dial-circular-picker")
@@ -2187,19 +2389,86 @@ impl MainView {
                                         .rounded_full()
                                         .bg(rgb(0x161715))
                                         .opacity(picker_slide)
-                                        .pt(px(22.0 - (1.0 - picker_slide) * 14.0))
-                                        .pb_4()
-                                        .flex()
-                                        .flex_col()
-                                        .items_center()
-                                        .justify_between()
+                                        // Layer 3a: Equal-width scrollable list with 4 true rounded corner masks
                                         .child(
                                             div()
+                                                .absolute()
+                                                .inset_0()
+                                                .pt(px(66.0))
+                                                .pb(px(60.0))
+                                                .flex()
+                                                .justify_center()
+                                                .child(
+                                                    div()
+                                                        .relative()
+                                                        .w(px(inner_well_d * 0.68))
+                                                        .h_full()
+                                                        .child(
+                                                            div()
+                                                                .id("circ-picker-scroll")
+                                                                .track_scroll(&self.picker_scroll)
+                                                                .size_full()
+                                                                .overflow_y_scroll()
+                                                                .on_scroll_wheel(cx.listener(
+                                                                    |_, _, _, cx| {
+                                                                        cx.notify();
+                                                                    },
+                                                                ))
+                                                                .flex()
+                                                                .flex_col()
+                                                                .gap(px(picker_row_gap))
+                                                                .children(picker_rows),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .absolute()
+                                                                .inset_0()
+                                                                .child(
+                                                                    canvas(
+                                                                        |_, _, _| {},
+                                                                        move |bounds, _, window, _| {
+                                                                            paint_rounded_container_mask(
+                                                                                bounds, 28.0, window,
+                                                                            );
+                                                                        },
+                                                                    )
+                                                                    .size_full(),
+                                                                ),
+                                                        ),
+                                                ),
+                                        )
+                                        // Layer 3b: True circular mask ring + curved arc scrollbar
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .inset_0()
+                                                .child(
+                                                    canvas(
+                                                        |_, _, _| {},
+                                                        move |bounds, _, window, _| {
+                                                            paint_picker_circle_mask(
+                                                                bounds,
+                                                                picker_scroll_frac,
+                                                                picker_thumb_frac,
+                                                                picker_has_scroll,
+                                                                window,
+                                                            );
+                                                        },
+                                                    )
+                                                    .size_full(),
+                                                ),
+                                        )
+                                        // Layer 3c: Header above mask
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .top(px(header_top))
+                                                .left_0()
+                                                .right_0()
                                                 .flex()
                                                 .flex_col()
                                                 .items_center()
                                                 .gap_0p5()
-                                                .flex_shrink_0()
                                                 .child(
                                                     div()
                                                         .text_size(px(8.5))
@@ -2237,6 +2506,12 @@ impl MainView {
                                                                             snap.ready_count,
                                                                             snap.nodes.len()
                                                                         )
+                                                                    } else if chain_active {
+                                                                        format!(
+                                                                            "选择前置节点 · {}/{}",
+                                                                            snap.ready_count,
+                                                                            snap.nodes.len()
+                                                                        )
                                                                     } else {
                                                                         format!(
                                                                             "选择出口节点 · {}/{}",
@@ -2248,54 +2523,41 @@ impl MainView {
                                                         ),
                                                 ),
                                         )
+                                        // Layer 3d: Close pill above mask
                                         .child(
                                             div()
-                                                .w(px(inner_well_d * 0.72))
-                                                .flex_1()
-                                                .min_h_0()
-                                                .my_2()
+                                                .absolute()
+                                                .bottom(px(18.0))
+                                                .left_0()
+                                                .right_0()
                                                 .flex()
-                                                .gap_1p5()
+                                                .justify_center()
                                                 .child(
                                                     div()
-                                                        .id("circ-picker-scroll")
-                                                        .track_scroll(&self.picker_scroll)
-                                                        .flex_1()
-                                                        .min_w_0()
-                                                        .overflow_y_scroll()
-                                                        .flex()
-                                                        .flex_col()
-                                                        .gap_1()
-                                                        .children(picker_rows),
-                                                )
-                                                .child(circ_scrollbar),
-                                        )
-                                        .child(
-                                            div()
-                                                .id("circ-picker-close")
-                                                .flex_shrink_0()
-                                                .px_3p5()
-                                                .py_1()
-                                                .rounded_full()
-                                                .bg(rgb(0x1d1f1c))
-                                                .hover(|s| {
-                                                    s.bg(rgb(0x272a26))
-                                                        .border_color(theme::braun_orange())
-                                                })
-                                                .border_1()
-                                                .border_color(rgb(0x333630))
-                                                .cursor_pointer()
-                                                .text_size(px(10.0))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(theme::lcd_text())
-                                                .whitespace_nowrap()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, _, cx| {
-                                                        this.toggle_node_picker(false, cx);
-                                                    }),
-                                                )
-                                                .child("▲ 返回表盘"),
+                                                        .id("circ-picker-close")
+                                                        .px_3p5()
+                                                        .py_1()
+                                                        .rounded_full()
+                                                        .bg(rgb(0x1d1f1c))
+                                                        .hover(|s| {
+                                                            s.bg(rgb(0x272a26))
+                                                                .border_color(theme::braun_orange())
+                                                        })
+                                                        .border_1()
+                                                        .border_color(rgb(0x333630))
+                                                        .cursor_pointer()
+                                                        .text_size(px(10.0))
+                                                        .font_weight(FontWeight::MEDIUM)
+                                                        .text_color(theme::lcd_text())
+                                                        .whitespace_nowrap()
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            cx.listener(|this, _, _, cx| {
+                                                                this.toggle_node_picker(false, cx);
+                                                            }),
+                                                        )
+                                                        .child("▲ 返回表盘"),
+                                                ),
                                         ),
                                 )
                             }),

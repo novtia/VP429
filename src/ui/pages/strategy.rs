@@ -1,4 +1,6 @@
+use crate::config::ChainExitSource;
 use crate::mihomo::MihomoManager;
+use crate::ui::anim::render_pill_toggle;
 use crate::ui::{theme, MainView};
 use gpui::*;
 
@@ -10,6 +12,19 @@ impl MainView {
         let mihomo_status = MihomoManager::resolve_binary_path(&cfg)
             .map(|p| format!("已就绪: {}", p.to_string_lossy()))
             .unwrap_or_else(|| "未检测到 mihomo.exe，请点击右侧一键下载".to_string());
+        let p_chain = self
+            .anims
+            .get("tog_chain", if cfg.enable_chain_proxy { 1.0 } else { 0.0 });
+        let chain_exit_desc = match &cfg.chain_exit_source {
+            Some(ChainExitSource::SubscriptionNode { name }) => {
+                format!("当前落地: 订阅节点「{}」（可在「节点列表」更换）", name)
+            }
+            Some(ChainExitSource::CustomSpec { .. }) => {
+                "当前落地: 自定义落地节点（前置池 -> 自定义固定出口）".to_string()
+            }
+            None => "当前未指定落地节点：请在「节点列表」点「设为落地」或在下方填入自定义落地"
+                .to_string(),
+        };
 
         let setting_row = |title: &'static str, desc: String, right: AnyElement| {
             div()
@@ -241,6 +256,130 @@ impl MainView {
                                     .child("一键下载 / 更新内核")
                                     .into_any_element(),
                             )),
+                    )
+                    .child(
+                        div()
+                            .bg(theme::card_bg())
+                            .border_1()
+                            .border_color(theme::border_color())
+                            .rounded(px(5.0))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .bg(theme::card_header_bg())
+                                    .border_b_1()
+                                    .border_color(theme::border_color())
+                                    .text_xs()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(theme::ink_secondary())
+                                    .child("链式代理（前置中转可切 + 固定落地出口防封）"),
+                            )
+                            .child(setting_row(
+                                "启用链式代理",
+                                chain_exit_desc,
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .id("strategy-toggle-chain")
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _, _, cx| {
+                                                    let eng = this.engine.clone();
+                                                    let next = !cfg.enable_chain_proxy;
+                                                    this.rt.spawn(async move {
+                                                        let _ = eng.toggle_chain_proxy(next).await;
+                                                    });
+                                                    cx.notify();
+                                                }),
+                                            )
+                                            .child(render_pill_toggle(p_chain, 0xe84c1e)),
+                                    )
+                                    .child(
+                                        div()
+                                            .id("btn-clear-chain-exit")
+                                            .px_2p5()
+                                            .py_1()
+                                            .bg(theme::btn_bg())
+                                            .hover(|s| s.bg(theme::btn_hover()))
+                                            .border_1()
+                                            .border_b_2()
+                                            .border_color(theme::border_strong())
+                                            .rounded(px(4.0))
+                                            .cursor_pointer()
+                                            .text_xs()
+                                            .text_color(theme::ink_primary())
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.clear_chain_exit(cx);
+                                                }),
+                                            )
+                                            .child("清除落地"),
+                                    )
+                                    .into_any_element(),
+                            ))
+                            .child(setting_row(
+                                "链式 429 退避重试间隔 (ms)",
+                                "开启链式代理后命中 429 不切出口 IP，等待该时长后原出口重放"
+                                    .to_string(),
+                                div()
+                                    .w(px(100.0))
+                                    .child(self.chain_backoff_input.clone())
+                                    .into_any_element(),
+                            ))
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_3()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .justify_between()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(theme::ink_primary())
+                                                    .child("自定义落地节点（SOCKS5/HTTP URL 或单条 Clash 节点 YAML）"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .id("btn-apply-custom-exit")
+                                                    .px_3()
+                                                    .py_1()
+                                                    .bg(theme::braun_orange())
+                                                    .hover(|s| s.bg(theme::braun_orange_border()))
+                                                    .border_1()
+                                                    .border_b_2()
+                                                    .border_color(theme::braun_orange_border())
+                                                    .rounded(px(4.0))
+                                                    .cursor_pointer()
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(theme::white())
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(|this, _, _, cx| {
+                                                            this.apply_custom_chain_exit(cx);
+                                                        }),
+                                                    )
+                                                    .child("应用自定义落地"),
+                                            ),
+                                    )
+                                    .child(div().w_full().child(self.chain_exit_input.clone())),
+                            ),
                     ),
             )
             .child(self.render_scrollbar("sb-strategy", &self.strategy_scroll, false, cx))

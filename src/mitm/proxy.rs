@@ -201,7 +201,15 @@ async fn handle_mitm_http_request(
     port: u16,
     ctx: MitmProxyContext,
 ) -> std::result::Result<Response<ProxyBody>, hyper::Error> {
-    let (bypass_port, auto_retry, max_retries, max_body_bytes, intercept_codes) = {
+    let (
+        bypass_port,
+        auto_retry,
+        max_retries,
+        max_body_bytes,
+        intercept_codes,
+        chain_proxy,
+        chain_backoff_ms,
+    ) = {
         let cfg = ctx.config.read().unwrap();
         (
             cfg.mihomo_bypass_port,
@@ -209,6 +217,8 @@ async fn handle_mitm_http_request(
             cfg.max_retries,
             cfg.max_retry_body_bytes,
             cfg.intercept_status_codes.clone(),
+            cfg.enable_chain_proxy && cfg.chain_exit_source.is_some(),
+            cfg.chain_429_backoff_ms.clamp(100, 30_000),
         )
     };
 
@@ -228,11 +238,16 @@ async fn handle_mitm_http_request(
         }
     } else {
         // Too large to buffer; forward once without retry
-        let used_node = ctx
-            .scheduler
-            .prepare_for_request()
-            .await
-            .unwrap_or_else(|| "DIRECT".to_string());
+        let used_node = if chain_proxy {
+            ctx.scheduler
+                .current_node_name()
+                .unwrap_or_else(|| "DIRECT".to_string())
+        } else {
+            ctx.scheduler
+                .prepare_for_request()
+                .await
+                .unwrap_or_else(|| "DIRECT".to_string())
+        };
         let method_str = parts.method.to_string();
         let forward_req = Request::from_parts(parts, incoming_body.boxed());
         return match send_upstream_https(forward_req, &host, port, bypass_port, &ctx.upstream_tls)
@@ -247,12 +262,20 @@ async fn handle_mitm_http_request(
                     .map(|s| s.trim() == "8")
                     .unwrap_or(false);
                 if intercept_codes.contains(&code) || is_grpc_429 {
-                    let _ = ctx.scheduler.report_429(&used_node, &host).await;
+                    if chain_proxy {
+                        ctx.scheduler.record_429_fixed_exit(&host);
+                    } else {
+                        let _ = ctx.scheduler.report_429(&used_node, &host).await;
+                    }
                 } else {
                     ctx.scheduler.record_success(&used_node, false);
                     ctx.bus.info(format!(
-                        "[MITM] {} {} -> HTTP {} (节点: {})",
-                        method_str, host, code, used_node
+                        "[MITM] {} {} -> HTTP {} ({}: {})",
+                        method_str,
+                        host,
+                        code,
+                        if chain_proxy { "链式前置" } else { "节点" },
+                        used_node
                     ));
                 }
                 Ok(resp.map(|b| b.boxed()))
@@ -267,11 +290,16 @@ async fn handle_mitm_http_request(
     let body_bytes = buffered_body.unwrap_or_default();
     let total_attempts = if auto_retry { max_retries + 1 } else { 1 };
 
-    let mut current_node = ctx
-        .scheduler
-        .prepare_for_request()
-        .await
-        .unwrap_or_else(|| "DIRECT".to_string());
+    let mut current_node = if chain_proxy {
+        ctx.scheduler
+            .current_node_name()
+            .unwrap_or_else(|| "DIRECT".to_string())
+    } else {
+        ctx.scheduler
+            .prepare_for_request()
+            .await
+            .unwrap_or_else(|| "DIRECT".to_string())
+    };
 
     for attempt in 0..total_attempts {
         let mut req_builder = Request::builder()
@@ -310,6 +338,22 @@ async fn handle_mitm_http_request(
                     .map(|s| s.trim() == "8")
                     .unwrap_or(false);
                 if intercept_codes.contains(&code) || is_grpc_429 {
+                    if chain_proxy {
+                        ctx.scheduler.record_429_fixed_exit(&host);
+                        if attempt + 1 < total_attempts {
+                            ctx.bus.info(format!(
+                                "{} 链式固定出口退避 {}ms 后进行重试 #{}",
+                                host,
+                                chain_backoff_ms,
+                                attempt + 1
+                            ));
+                            tokio::time::sleep(std::time::Duration::from_millis(chain_backoff_ms))
+                                .await;
+                            continue;
+                        }
+                        return Ok(resp.map(|b| b.boxed()));
+                    }
+
                     let next_node = ctx
                         .scheduler
                         .report_429(&current_node, &host)
@@ -327,13 +371,21 @@ async fn handle_mitm_http_request(
                     ctx.scheduler.record_success(&current_node, was_retry);
                     if was_retry {
                         ctx.bus.ok(format!(
-                            "{} 透明重试 #{} 成功 -> HTTP {} (节点: {})",
-                            host, attempt, code, current_node
+                            "{} 透明重试 #{} 成功 -> HTTP {} ({}: {})",
+                            host,
+                            attempt,
+                            code,
+                            if chain_proxy { "链式前置" } else { "节点" },
+                            current_node
                         ));
                     } else {
                         ctx.bus.info(format!(
-                            "[MITM] {} {} -> HTTP {} (节点: {})",
-                            parts.method, host, code, current_node
+                            "[MITM] {} {} -> HTTP {} ({}: {})",
+                            parts.method,
+                            host,
+                            code,
+                            if chain_proxy { "链式前置" } else { "节点" },
+                            current_node
                         ));
                     }
                     return Ok(resp.map(|b| b.boxed()));
@@ -345,7 +397,12 @@ async fn handle_mitm_http_request(
                     host, current_node, err
                 ));
                 if attempt + 1 < total_attempts {
-                    if let Some(next) = ctx.scheduler.rotate_next("上游连接异常自动切换").await {
+                    let reason = if chain_proxy {
+                        "链式前置连接异常，自动切换前置节点"
+                    } else {
+                        "上游连接异常自动切换"
+                    };
+                    if let Some(next) = ctx.scheduler.rotate_next(reason).await {
                         current_node = next;
                         continue;
                     }
