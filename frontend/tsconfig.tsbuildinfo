@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/circulardial.tsx","./src/components/flagicon.tsx","./src/components/sidebar.tsx","./src/components/titlebar.tsx","./src/pages/dashboardpage.tsx","./src/pages/nodespage.tsx","./src/pages/subpages.tsx"],"version":"5.9.3"}

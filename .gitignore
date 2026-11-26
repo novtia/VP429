@@ -1,5 +1,8 @@
 /target
 /data
+/frontend/node_modules
+/frontend/dist
+/gen/schemas
 *.log
 *.pem
 *.key

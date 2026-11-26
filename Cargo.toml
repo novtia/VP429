@@ -2,10 +2,27 @@
 name = "VP429"
 version = "0.1.0"
 edition = "2021"
-description = "Rust + GPUI VPN desktop proxy with Clash subscription support, node polling, and selective HTTPS MITM 429 auto-failover"
+default-run = "VP429-web"
+description = "VP429 — Dual-Edition VPN (Tauri v2 React Web Edition + Pure Rust GPUI Lite Edition)"
+
+[features]
+default = ["web"]
+web = ["dep:tauri", "dep:tauri-build"]
+lite = ["dep:gpui", "dep:winresource"]
+
+[[bin]]
+name = "VP429-web"
+path = "src/bin/vp429_web.rs"
+required-features = ["web"]
+
+[[bin]]
+name = "VP429-lite"
+path = "src/bin/vp429_lite.rs"
+required-features = ["lite"]
 
 [dependencies]
-gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11"] }
+tauri = { version = "2", features = [], optional = true }
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11"], optional = true }
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio", "http1"] }
@@ -42,8 +59,11 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+[build-dependencies]
+tauri-build = { version = "2", features = [], optional = true }
+
 [target.'cfg(windows)'.build-dependencies]
-winresource = "0.1"
+winresource = { version = "0.1", optional = true }
 
 [profile.release]
 opt-level = "s"

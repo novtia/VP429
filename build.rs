@@ -4,11 +4,10 @@ use std::path::Path;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    #[cfg(all(feature = "lite", not(feature = "web")))]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
         && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
     {
-        // Windows defaults to a 1 MB main-thread stack, which is easily exceeded by
-        // unoptimized debug builds of GPUI element trees. Match macOS/Linux (8 MB).
         println!("cargo:rustc-link-arg=/STACK:8388608");
     }
 
@@ -49,12 +48,30 @@ fn main() {
 </assembly>"#
         );
 
-        let mut res = winresource::WindowsResource::new();
-        res.set_icon(ico_path.to_str().unwrap());
-        res.set("ProductName", "VP429");
-        res.set("FileDescription", "VP429 — Rust + GPUI VPN");
-        res.set_manifest(&manifest);
-        res.compile().expect("Failed to compile Windows resources");
+        #[cfg(feature = "web")]
+        {
+            let attrs = tauri_build::Attributes::new().windows_attributes(
+                tauri_build::WindowsAttributes::new()
+                    .window_icon_path(ico_path)
+                    .app_manifest(manifest),
+            );
+            tauri_build::try_build(attrs).expect("failed to run tauri-build");
+        }
+
+        #[cfg(all(feature = "lite", not(feature = "web")))]
+        {
+            let mut res = winresource::WindowsResource::new();
+            res.set_icon(ico_path.to_str().unwrap());
+            res.set("ProductName", "VP429 Lite");
+            res.set("FileDescription", "VP429 Lite — Pure Rust GPUI VPN");
+            res.set_manifest(&manifest);
+            res.compile().expect("Failed to compile Windows resources");
+        }
+    }
+
+    #[cfg(all(not(windows), feature = "web"))]
+    {
+        tauri_build::build();
     }
 }
 

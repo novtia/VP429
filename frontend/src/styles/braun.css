@@ -1,0 +1,656 @@
+@import "tailwindcss";
+
+* {
+  box-sizing: border-box;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.braun-chassis {
+  background: #ebeae4;
+  color: #191918;
+}
+
+/* CNC-Machined Braun Window Titlebar */
+.braun-titlebar {
+  height: 38px;
+  background: linear-gradient(180deg, #eeede7 0%, #e5e3db 100%);
+  border-bottom: 1px solid #c2bfb4;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.88),
+    0 1px 0 rgba(255, 255, 255, 0.48);
+}
+
+.tb-brand-badge {
+  background: linear-gradient(165deg, #f8f7f2 0%, #e6e4dc 100%);
+  border: 1px solid #bbb8ac;
+  border-bottom-color: #a8a598;
+  box-shadow:
+    0 1px 2px rgba(25, 25, 24, 0.09),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.tb-status-tray {
+  background: linear-gradient(180deg, #dcdad0 0%, #e4e2da 100%);
+  border: 1px solid #c2bfb4;
+  border-bottom-color: #f0eee7;
+  border-right-color: #ebe9e1;
+  box-shadow:
+    inset 0 1.5px 3px rgba(25, 25, 24, 0.13),
+    0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.tb-status-chip {
+  transition: background-color 140ms ease, color 140ms ease;
+}
+.tb-status-chip:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.tb-win-btn {
+  width: 32px;
+  height: 24px;
+  border-radius: 5px;
+  color: #5b5952;
+  border: 1px solid transparent;
+  transition: all 140ms ease;
+}
+.tb-win-btn:hover {
+  background: linear-gradient(180deg, #f8f7f2 0%, #e9e7df 100%);
+  border-color: #c5c2b6;
+  color: #191918;
+  box-shadow: 0 1px 2px rgba(25, 25, 24, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+.tb-win-btn:active {
+  background: #dedcd3;
+  box-shadow: inset 0 1.5px 2.5px rgba(25, 25, 24, 0.14);
+}
+.tb-win-close:hover {
+  background: linear-gradient(180deg, #f25829 0%, #df4215 100%);
+  border-color: #b5320c;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(232, 76, 30, 0.3), inset 0 1px 0 rgba(255, 224, 206, 0.45);
+}
+
+/* CNC-Machined Braun Hardware Sidebar Rail */
+.braun-sidebar {
+  width: 62px;
+  background: linear-gradient(90deg, #eae8e1 0%, #e5e3db 90%, #dcdad1 100%);
+  border-right: 1px solid #c2bfb4;
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, 0.55),
+    inset 1px 0 0 rgba(255, 255, 255, 0.45);
+  transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.braun-sidebar.is-expanded {
+  width: 172px;
+}
+
+.sb-nav-tray {
+  background: linear-gradient(180deg, #dcdad0 0%, #e3e1d8 100%);
+  border: 1px solid #c4c1b6;
+  border-bottom-color: #efede6;
+  border-right-color: #e9e7df;
+  box-shadow:
+    inset 0 2px 4px rgba(25, 25, 24, 0.13),
+    0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.sb-nav-btn {
+  position: relative;
+  height: 36px;
+  border-radius: 6px;
+  color: #5b5952;
+  border: 1px solid transparent;
+  transition: all 150ms ease;
+}
+.sb-nav-btn:hover:not(.is-active) {
+  background: rgba(255, 255, 255, 0.45);
+  color: #191918;
+}
+.sb-nav-btn.is-active {
+  background: linear-gradient(180deg, #faf9f5 0%, #efede6 100%);
+  color: #191918;
+  border-color: #c5c2b6;
+  border-bottom-color: #b4b1a4;
+  box-shadow:
+    0 2px 5px rgba(25, 25, 24, 0.11),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+.sb-nav-btn.is-active .sb-ico {
+  color: #e84c1e;
+}
+
+.sb-led-slit {
+  position: absolute;
+  left: 3.5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 16px;
+  border-radius: 9999px;
+  background: transparent;
+  transition: background-color 180ms ease, box-shadow 180ms ease;
+}
+.sb-nav-btn.is-active .sb-led-slit {
+  background: #e84c1e;
+  box-shadow: 0 0 6px rgba(232, 76, 30, 0.55);
+}
+
+.sb-tooltip {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  background: #1b1c19;
+  color: #f2f1ec;
+  border: 1px solid #353832;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+  padding: 3px 8px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+  z-index: 40;
+}
+.braun-sidebar:not(.is-expanded) .sb-nav-btn:hover .sb-tooltip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+.sb-divider {
+  height: 1px;
+  background: #c7c4b9;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.sb-power-socket {
+  background: linear-gradient(180deg, #d7d5cb 0%, #e1dfd6 100%);
+  border: 1px solid #bdbab0;
+  border-bottom-color: #efede6;
+  box-shadow:
+    inset 0 2px 4px rgba(25, 25, 24, 0.16),
+    0 1px 0 rgba(255, 255, 255, 0.88);
+}
+
+.sb-power-btn {
+  background: linear-gradient(180deg, #ff693b 0%, #e84c1e 65%, #c93a10 100%);
+  color: #ffffff;
+  border: 1px solid #a82e0b;
+  border-bottom-width: 2px;
+  box-shadow:
+    0 2px 6px rgba(232, 76, 30, 0.32),
+    inset 0 1px 0 rgba(255, 224, 206, 0.55);
+  transition: all 160ms ease;
+}
+.sb-power-btn:hover {
+  background: linear-gradient(180deg, #ff764b 0%, #ef5425 65%, #d13e13 100%);
+}
+.sb-power-btn:active {
+  transform: translateY(1px);
+  border-bottom-width: 1px;
+}
+.sb-power-btn.is-running {
+  background: linear-gradient(180deg, #272925 0%, #1b1c19 100%);
+  color: #5bd68a;
+  border-color: #111210;
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.sb-power-btn.is-running:hover {
+  color: #ff794e;
+  border-color: #4a2418;
+}
+
+/* Multi-Stepped CNC Sculpted Dial Bezel */
+.dial-bezel {
+  position: relative;
+  background:
+    conic-gradient(
+      from 215deg,
+      rgba(255, 255, 255, 0.32) 0deg,
+      rgba(255, 255, 255, 0) 65deg,
+      rgba(25, 25, 24, 0.14) 145deg,
+      rgba(255, 255, 255, 0.24) 225deg,
+      rgba(25, 25, 24, 0.1) 305deg,
+      rgba(255, 255, 255, 0.32) 360deg
+    ),
+    linear-gradient(142deg, #fcfbf8 0%, #e9e7df 44%, #cfcdc3 78%, #bab7ac 100%);
+  border: 1px solid #aba89c;
+  box-shadow:
+    0 14px 28px rgba(25, 25, 24, 0.24),
+    4px 7px 14px rgba(25, 25, 24, 0.18),
+    -3px -3px 10px rgba(255, 255, 255, 0.55),
+    inset 2.5px 2.5px 3px rgba(255, 255, 255, 0.95),
+    inset -2.5px -3px 5px rgba(25, 25, 24, 0.28);
+}
+.dial-bezel::before {
+  content: "";
+  position: absolute;
+  inset: 4.5px;
+  border-radius: 9999px;
+  border: 1px solid rgba(25, 25, 24, 0.14);
+  box-shadow:
+    inset 1px 1px 1.5px rgba(25, 25, 24, 0.18),
+    1px 1px 1px rgba(255, 255, 255, 0.72);
+  pointer-events: none;
+}
+
+.dial-chamfer {
+  background: linear-gradient(142deg, #8b887e 0%, #b5b2a6 46%, #e2e0d7 82%, #f7f6f1 100%);
+  padding: 3.5px;
+  box-shadow:
+    inset 2px 2.5px 4px rgba(25, 25, 24, 0.45),
+    inset -1.5px -1.5px 3px rgba(255, 255, 255, 0.85),
+    0 1px 1px rgba(255, 255, 255, 0.6);
+}
+
+.dial-well {
+  background:
+    radial-gradient(circle at 28% 22%, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0) 42%),
+    radial-gradient(circle at 50% 44%, #232522 0%, #171817 66%, #0e0f0e 100%);
+  box-shadow:
+    inset 5px 7px 16px rgba(0, 0, 0, 0.9),
+    inset 0 2px 6px rgba(0, 0, 0, 0.85),
+    inset -2px -2px 6px rgba(255, 255, 255, 0.05),
+    inset 0 0 0 1.5px #101110,
+    0 0 0 1px rgba(0, 0, 0, 0.42);
+}
+
+/* Precision Machined Ignition Switch Assembly */
+.ignition-socket {
+  background: radial-gradient(circle at 50% 35%, #262825 0%, #151715 68%, #0d0e0d 100%);
+  border: 1px solid #353832;
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.72),
+    0 0 0 5px rgba(0, 0, 0, 0.28),
+    inset 0 1.5px 3px rgba(255, 255, 255, 0.08),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.85);
+  position: relative;
+}
+.ignition-bezel-ring {
+  background: conic-gradient(from 220deg, #3b3e38 0deg, #20221f 75deg, #484b45 160deg, #1a1c19 245deg, #3b3e38 360deg);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.2),
+    0 2px 6px rgba(0, 0, 0, 0.65);
+}
+.ignition-light-ring {
+  box-shadow:
+    0 0 14px rgba(232, 76, 30, 0.45),
+    inset 0 0 6px rgba(255, 138, 92, 0.4);
+  border: 1.5px solid rgba(255, 126, 82, 0.82);
+  transition: border-color 260ms ease, box-shadow 260ms ease;
+}
+.ignition-socket.is-running .ignition-light-ring {
+  border-color: rgba(91, 214, 138, 0.72);
+  box-shadow:
+    0 0 14px rgba(91, 214, 138, 0.32),
+    inset 0 0 6px rgba(91, 214, 138, 0.28);
+}
+.ignition-socket.is-running:hover .ignition-light-ring {
+  border-color: rgba(255, 106, 61, 0.78);
+  box-shadow:
+    0 0 16px rgba(232, 76, 30, 0.42),
+    inset 0 0 6px rgba(255, 106, 61, 0.35);
+}
+.ignition-socket.is-stopping .ignition-light-ring {
+  border-color: rgba(255, 106, 61, 0.88);
+  box-shadow:
+    0 0 20px rgba(232, 76, 30, 0.58),
+    inset 0 0 10px rgba(255, 106, 61, 0.48);
+}
+.ignition-socket.is-stopping .power-btn-core {
+  transform: scale(0.96);
+}
+@keyframes ignitionBreath {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(232, 76, 30, 0.38), inset 0 0 6px rgba(255, 140, 96, 0.38);
+  }
+  50% {
+    box-shadow: 0 0 22px rgba(255, 106, 61, 0.68), inset 0 0 10px rgba(255, 165, 122, 0.58);
+  }
+}
+.ignition-socket:not(.is-running) .ignition-light-ring {
+  animation: ignitionBreath 2.8s ease-in-out infinite;
+}
+
+.power-btn-core {
+  background:
+    radial-gradient(circle at 36% 24%, rgba(255, 216, 192, 0.34) 0%, rgba(255, 106, 61, 0) 44%),
+    radial-gradient(circle at 50% 42%, #ff6b3d 0%, #e84c1e 58%, #b9330c 100%);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.55),
+    inset 0 1.5px 2px rgba(255, 232, 218, 0.62),
+    inset 0 -3px 6px rgba(110, 22, 0, 0.55);
+  position: relative;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 200ms ease, background 200ms ease;
+}
+.power-btn-core::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+  pointer-events: none;
+}
+.power-btn-core:hover {
+  transform: scale(1.03);
+}
+.power-btn-core:active {
+  transform: scale(0.955);
+}
+.power-btn-stop {
+  background:
+    radial-gradient(circle at 36% 24%, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 42%),
+    radial-gradient(circle at 50% 42%, #31342f 0%, #20221f 62%, #131513 100%);
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.62),
+    inset 0 1.5px 2px rgba(255, 255, 255, 0.18),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.72);
+}
+.power-btn-stop::before {
+  border-color: rgba(91, 214, 138, 0.24);
+}
+.power-btn-stop:hover {
+  background:
+    radial-gradient(circle at 36% 24%, rgba(255, 130, 92, 0.18) 0%, rgba(255, 255, 255, 0) 44%),
+    radial-gradient(circle at 50% 42%, #383330 0%, #252220 62%, #171514 100%);
+}
+
+.btn-embedded-node {
+  background: rgba(14, 15, 14, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  box-shadow: inset 0 1.5px 3px rgba(0, 0, 0, 0.42), 0 1px 0 rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(4px);
+  transition: all 150ms ease;
+}
+.btn-embedded-node:hover {
+  background: rgba(12, 13, 12, 0.68);
+  border-color: rgba(255, 255, 255, 0.52);
+}
+.power-btn-stop .btn-embedded-node {
+  background: rgba(10, 11, 10, 0.62);
+  border-color: rgba(91, 214, 138, 0.32);
+}
+
+.dial-pager-pill {
+  background: #1d1f1c;
+  border: 1px solid #333630;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45);
+  transition: all 150ms ease;
+}
+.dial-pager-pill:hover {
+  background: #272a26;
+  border-color: #e84c1e;
+}
+
+/* Recessed Ceramic Controls & Chassis Backplane */
+.chassis-backplane {
+  background-color: #e3e1d8;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(25, 25, 24, 0.025) 0%, rgba(25, 25, 24, 0) 52%, rgba(25, 25, 24, 0.055) 100%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.14) 0px, rgba(255, 255, 255, 0.14) 1px, transparent 1px, transparent 4px),
+    linear-gradient(90deg, rgba(25, 25, 24, 0.025) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(25, 25, 24, 0.025) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 4px, 28px 28px, 28px 28px;
+  box-shadow: inset 0 2px 10px rgba(25, 25, 24, 0.07);
+}
+.chassis-screw {
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 30%, #e8e6de 0%, #c6c4b9 70%, #aca99d 100%);
+  border: 1px solid #a8a599;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.75), 0 1px 1px rgba(25, 25, 24, 0.12);
+}
+.chassis-screw::after {
+  content: "";
+  position: absolute;
+  left: 1.5px;
+  right: 1.5px;
+  top: 50%;
+  height: 1px;
+  background: #7e7b70;
+  transform: translateY(-50%) rotate(-32deg);
+}
+
+.ceramic-panel {
+  background: linear-gradient(158deg, #f9f8f4 0%, #f4f3ed 58%, #eeece5 100%);
+  border: 1px solid #d4d1c7;
+  box-shadow:
+    4px 7px 18px rgba(42, 40, 34, 0.09),
+    1px 2px 4px rgba(42, 40, 34, 0.06),
+    -2px -2px 8px rgba(255, 255, 255, 0.55),
+    inset 1px 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+.hw-module-card {
+  background: linear-gradient(162deg, #e7e5dc 0%, #efede6 55%, #f4f3ed 100%);
+  border: 1px solid #c6c3b7;
+  border-bottom-color: #dedcd3;
+  border-right-color: #dedcd3;
+  box-shadow:
+    inset 0 2px 4.5px rgba(25, 25, 24, 0.13),
+    inset 1.5px 1.5px 2px rgba(25, 25, 24, 0.07),
+    inset -1px -1px 0 rgba(255, 255, 255, 0.72),
+    0 1px 0 rgba(255, 255, 255, 0.95);
+  transition: all 160ms ease;
+}
+.hw-slide-track {
+  width: 40px;
+  height: 20px;
+  border-radius: 5px;
+  background: #cfcdc3;
+  border: 1px solid #aba89d;
+  border-bottom-color: #dcdad1;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.24), 0 1px 0 rgba(255, 255, 255, 0.85);
+  position: relative;
+  transition: background-color 180ms ease;
+}
+.hw-slide-track.pill-on {
+  background: linear-gradient(180deg, #d94115 0%, #ef5425 100%);
+  border-color: #a82e0b;
+}
+.hw-slide-thumb {
+  width: 16px;
+  height: 14px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #ffffff 0%, #e7e5dd 100%);
+  border: 1px solid rgba(25, 25, 24, 0.16);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  box-shadow: 0 1.5px 3px rgba(0, 0, 0, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.hw-slide-thumb::before,
+.hw-slide-thumb::after {
+  content: "";
+  width: 1px;
+  height: 7px;
+  background: #c4c1b7;
+}
+.hw-slide-track.pill-on .hw-slide-thumb {
+  transform: translateX(18px);
+}
+
+.hw-channel-row {
+  background: linear-gradient(165deg, #e9e7df 0%, #f1efe8 70%, #f4f3ee 100%);
+  border: 1px solid #ccc9be;
+  border-bottom-color: #e2e0d7;
+  box-shadow: inset 0 1.5px 3.5px rgba(25, 25, 24, 0.11), 0 1px 0 rgba(255, 255, 255, 0.92);
+  transition: all 150ms ease;
+}
+.hw-channel-row.is-active {
+  border-color: rgba(232, 76, 30, 0.58);
+  box-shadow: inset 2.5px 0 0 #e84c1e, inset 0 2px 4.5px rgba(25, 25, 24, 0.15), 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.hw-keycap-tray {
+  background: linear-gradient(180deg, #dedcd2 0%, #e7e5dc 100%);
+  border: 1px solid #c3c0b4;
+  border-bottom-color: #e0ded5;
+  box-shadow: inset 0 2px 4px rgba(25, 25, 24, 0.16), 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+.hw-keycap {
+  background: linear-gradient(180deg, #f6f5f0 0%, #e7e5dd 100%);
+  border: 1px solid #c5c2b7;
+  border-bottom-width: 2px;
+  color: #54524c;
+  box-shadow: 0 1px 2px rgba(25, 25, 24, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  transition: all 140ms ease;
+}
+.hw-keycap.is-active {
+  background: linear-gradient(180deg, #1b1c19 0%, #272925 100%);
+  border-color: #111210;
+  border-top-color: #e84c1e;
+  border-top-width: 2px;
+  border-bottom-width: 1px;
+  color: #ffffff;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.55);
+}
+
+.hw-readout-bay {
+  background: linear-gradient(166deg, #e2e0d7 0%, #ebe9e1 62%, #f1efe8 100%);
+  border: 1px solid #c0bdb1;
+  border-bottom-color: #dedcd3;
+  box-shadow: inset 0 2.5px 5px rgba(25, 25, 24, 0.16), 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+.hw-meter-trough {
+  background: #cfcdc3;
+  border: 1px solid #b4b1a5;
+  box-shadow: inset 0 2px 4px rgba(25, 25, 24, 0.28), 0 1px 0 rgba(255, 255, 255, 0.92);
+}
+.hw-micro-btn {
+  background: linear-gradient(180deg, #f8f7f2 0%, #e5e3da 100%);
+  border: 1px solid #c0bdb1;
+  border-bottom-width: 2px;
+  box-shadow: 0 1px 2px rgba(25, 25, 24, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: all 140ms ease;
+}
+.hw-micro-btn:hover {
+  border-color: #e84c1e;
+  color: #e84c1e;
+}
+.hw-btn-primary {
+  background: linear-gradient(180deg, #ff693b 0%, #e84c1e 65%, #c93a10 100%);
+  color: #ffffff;
+  border: 1px solid #a82e0b;
+  border-bottom-width: 2px;
+  box-shadow: 0 2px 5px rgba(232, 76, 30, 0.25), inset 0 1px 0 rgba(255, 224, 206, 0.52);
+  transition: all 140ms ease;
+}
+.hw-btn-primary:hover {
+  background: linear-gradient(180deg, #ff764b 0%, #ef5425 65%, #d13e13 100%);
+}
+
+.hw-pin {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #f5f4ef;
+  border: 1.5px solid #b8b5a9;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
+.hw-pin.pin-orange { border-color: #e84c1e; background: #ffccb8; }
+.hw-pin.pin-green { border-color: #1f8a4c; background: #bfead0; }
+
+/* PCB SVG & Animations */
+.trench-rail { fill: none; stroke: #bcb9ad; stroke-width: 1.2; stroke-linecap: round; }
+.trench-groove { fill: none; stroke: rgba(25, 25, 24, 0.08); stroke-width: 5.5; stroke-linecap: round; }
+.panel-group-relief {
+  filter:
+    drop-shadow(3px 6px 7px rgba(42, 40, 34, 0.12))
+    drop-shadow(-2px -2px 4px rgba(255, 255, 255, 0.55));
+}
+.panel-shape { fill: url(#panelSurfaceGrad); stroke: rgba(255, 255, 255, 0.52); stroke-width: 0.85; }
+.pcb-trace { fill: none; stroke: #d2d0c6; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; transition: stroke 260ms ease; }
+.pcb-trace-thin { fill: none; stroke: #dbd9d0; stroke-width: 1.05; stroke-linecap: round; stroke-linejoin: round; }
+.pcb-trace-active-orange { stroke: rgba(232, 76, 30, 0.55) !important; stroke-width: 1.65 !important; }
+.pcb-trace-active-green { stroke: rgba(31, 138, 76, 0.52) !important; stroke-width: 1.65 !important; }
+.pcb-trace-off { stroke: #e2e0d8 !important; stroke-dasharray: 3 3; }
+.pcb-arc-rail { fill: none; stroke: #d2d0c6; stroke-width: 1.15; stroke-dasharray: 4 3; }
+.pcb-via-outer { fill: #f5f4ef; stroke: #b9b6aa; stroke-width: 1.35; }
+.pcb-via-inner { fill: #c7c4b8; }
+.pcb-via-accent { fill: #e84c1e; opacity: 0.45; }
+.pcb-via-green { fill: #1f8a4c; opacity: 0.4; }
+.pcb-smd { fill: #eceae2; stroke: #c7c4b9; stroke-width: 1; }
+.pcb-pad-gold { fill: #d8c8a8; stroke: #bcae90; stroke-width: 0.7; }
+
+@keyframes pcbFlowFwd { from { stroke-dashoffset: 180; } to { stroke-dashoffset: 0; } }
+@keyframes pcbFlowRev { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 180; } }
+.pcb-pulse-orange, .pcb-pulse-green {
+  fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 18 162; opacity: 0; transition: opacity 380ms ease;
+}
+.pcb-pulse-orange { stroke: #e84c1e; animation: pcbFlowFwd 3s linear infinite; }
+.pcb-pulse-green { stroke: #1f8a4c; animation: pcbFlowRev 2.6s linear infinite; }
+.pcb-pulse-slow { animation-duration: 3.9s; }
+.pcb-pulse-fast { animation-duration: 2.1s; }
+.pcb-live .pcb-pulse-orange:not(.pulse-muted) { opacity: 0.85; }
+.pcb-live .pcb-pulse-green:not(.pulse-muted) { opacity: 0.78; }
+.pcb-live .pcb-via-accent, .pcb-live .pcb-via-green { opacity: 0.95; }
+.dial-moat-underglow { opacity: 0.18; transition: opacity 420ms ease; }
+.pcb-live .dial-moat-underglow { opacity: 0.85; }
+
+/* Dial Page Transitions & Picker */
+.dial-page { transition: opacity 340ms cubic-bezier(0.22, 1, 0.36, 1), transform 380ms cubic-bezier(0.22, 1, 0.36, 1); }
+.dial-page-hidden { opacity: 0; transform: scale(0.88); pointer-events: none; }
+.dial-page-visible { opacity: 1; transform: scale(1); pointer-events: auto; }
+.dial-main-layer { transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease; }
+.dial-main-slid-down { transform: translateY(102%); opacity: 0.12; pointer-events: none; }
+.dial-picker-layer { transform: translateY(-102%); opacity: 0; pointer-events: none; transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease; }
+.dial-picker-open { transform: translateY(0%); opacity: 1; pointer-events: auto; }
+.circular-list-mask {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 16%, black 84%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 16%, black 84%, transparent 100%);
+}
+.circular-scroll { scrollbar-width: none; }
+.circular-scroll::-webkit-scrollbar { display: none; }
+
+/* Nodes List & Grid Cards */
+.nodes-scroll::-webkit-scrollbar { width: 6px; }
+.nodes-scroll::-webkit-scrollbar-track { background: #e8e6de; }
+.nodes-scroll::-webkit-scrollbar-thumb { background: #bfbcb0; border-radius: 9999px; border: 1.5px solid #e8e6de; }
+.node-list-row { position: relative; border-bottom: 1px solid #e6e4dc; transition: background-color 140ms ease; }
+.node-list-row:last-child { border-bottom: none; }
+.node-list-row:hover { background: #eceae2; }
+.node-list-row.is-active { background: linear-gradient(90deg, rgba(232, 76, 30, 0.085) 0%, rgba(232, 76, 30, 0.02) 42%, transparent 100%); }
+.node-list-row.is-active::before {
+  content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px;
+  border-radius: 0 3px 3px 0; background: #e84c1e; box-shadow: 0 0 6px rgba(232, 76, 30, 0.45);
+}
+.node-grid-card {
+  position: relative;
+  background: linear-gradient(164deg, #f9f8f4 0%, #f1efe8 65%, #eae8df 100%);
+  border: 1px solid #d1cec3;
+  border-bottom-color: #c2bfb4;
+  box-shadow: 0 2px 6px rgba(25, 25, 24, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  transition: all 150ms ease;
+}
+.node-grid-card:hover {
+  border-color: #b4b0a2;
+  transform: translateY(-1px);
+  box-shadow: 0 5px 12px rgba(25, 25, 24, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+.node-grid-card.is-active {
+  background: linear-gradient(164deg, #fffaf7 0%, #f6efe9 65%, #efe7df 100%);
+  border-color: rgba(232, 76, 30, 0.72);
+  box-shadow: inset 0 2.5px 0 #e84c1e, 0 4px 12px rgba(232, 76, 30, 0.12);
+}
+
+@keyframes pulseDot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
+.pulse-dot { animation: pulseDot 1.8s ease-in-out infinite; }
+@keyframes pingBarBounce { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
+.ping-bar { width: 2.5px; height: 11px; border-radius: 1px; background: #e84c1e; transform-origin: bottom; animation: pingBarBounce 0.65s ease-in-out infinite; }

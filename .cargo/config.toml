@@ -1,0 +1,7 @@
+[alias]
+web = "run --bin VP429-web"
+lite = "run --bin VP429-lite --no-default-features --features lite"
+build-web = "build --release --bin VP429-web"
+build-lite = "build --release --bin VP429-lite --no-default-features --features lite"
+check-web = "check --bin VP429-web"
+check-lite = "check --bin VP429-lite --no-default-features --features lite"
