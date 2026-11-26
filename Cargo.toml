@@ -5,7 +5,7 @@ edition = "2021"
 description = "Rust + GPUI VPN desktop proxy with Clash subscription support, node polling, and selective HTTPS MITM 429 auto-failover"
 
 [dependencies]
-gpui = "0.2.2"
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11"] }
 tokio = { version = "1", features = ["full"] }
 hyper = { version = "1", features = ["http1", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio", "http1"] }

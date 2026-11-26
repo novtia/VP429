@@ -4,6 +4,14 @@ use std::path::Path;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        // Windows defaults to a 1 MB main-thread stack, which is easily exceeded by
+        // unoptimized debug builds of GPUI element trees. Match macOS/Linux (8 MB).
+        println!("cargo:rustc-link-arg=/STACK:8388608");
+    }
+
     #[cfg(windows)]
     {
         let assets_dir = Path::new("assets");
@@ -11,11 +19,42 @@ fn main() {
         let ico_path = assets_dir.join("app.ico");
         generate_swiss_v_reroute_ico(&ico_path);
 
+        let is_release = std::env::var("PROFILE").as_deref() == Ok("release");
+        let exec_level = if is_release {
+            "requireAdministrator"
+        } else {
+            "asInvoker"
+        };
+        let manifest = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
+    <asmv3:application>
+        <asmv3:windowsSettings>
+            <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
+            <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+        </asmv3:windowsSettings>
+    </asmv3:application>
+    <dependency>
+        <dependentAssembly>
+            <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" />
+        </dependentAssembly>
+    </dependency>
+    <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+        <security>
+            <requestedPrivileges>
+                <requestedExecutionLevel level="{exec_level}" uiAccess="false" />
+            </requestedPrivileges>
+        </security>
+    </trustInfo>
+</assembly>"#
+        );
+
         let mut res = winresource::WindowsResource::new();
         res.set_icon(ico_path.to_str().unwrap());
         res.set("ProductName", "VP429");
         res.set("FileDescription", "VP429 — Rust + GPUI VPN");
-        let _ = res.compile();
+        res.set_manifest(&manifest);
+        res.compile().expect("Failed to compile Windows resources");
     }
 }
 

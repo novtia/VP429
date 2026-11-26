@@ -962,6 +962,7 @@ impl ProxyEngine {
         self.bus.notify_state();
     }
 
+    #[allow(dead_code)]
     pub async fn simulate_429(&self) {
         let cur = self
             .scheduler

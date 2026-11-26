@@ -47,12 +47,15 @@ pub struct MainView {
     // Modal state for adding a new subscription profile
     show_add_modal: bool,
     open_profile_menu: Option<String>,
-    // Dashboard slide-up node picker popup
+    // Dashboard circular shutter node picker & dial page state
     show_node_picker: bool,
     picker_closed_at: Option<Instant>,
     picker_scroll: ScrollHandle,
+    dial_show_speed: bool,
+    dial_launch_started: Option<Instant>,
     // Unified 60fps animation registry & async loading states
     anims: UiAnims,
+    peak_down_bps: u64,
     power_busy: Arc<AtomicBool>,
     power_starting: bool,
     sim429_flash_until: Option<Instant>,
@@ -158,7 +161,10 @@ impl MainView {
             show_node_picker: false,
             picker_closed_at: None,
             picker_scroll: ScrollHandle::new(),
+            dial_show_speed: false,
+            dial_launch_started: None,
             anims: UiAnims::new(),
+            peak_down_bps: 0,
             power_busy: Arc::new(AtomicBool::new(false)),
             power_starting: false,
             sim429_flash_until: None,
@@ -199,7 +205,14 @@ impl MainView {
             return;
         }
         self.show_node_picker = open;
-        if !open {
+        if open {
+            if !self.engine.is_testing_latency() {
+                let eng = self.engine.clone();
+                self.rt.spawn(async move {
+                    eng.ping_all_nodes().await;
+                });
+            }
+        } else {
             self.picker_closed_at = Some(Instant::now());
         }
         cx.notify();
@@ -222,6 +235,12 @@ impl MainView {
         let busy = self.power_busy.clone();
         let running = engine.is_running();
         self.power_starting = !running;
+        if !running {
+            self.dial_launch_started = Some(Instant::now());
+        } else {
+            self.dial_launch_started = None;
+            self.dial_show_speed = false;
+        }
         self.rt.spawn(async move {
             let started_at = Instant::now();
             if running {
@@ -368,7 +387,28 @@ impl Render for MainView {
         let ca_ok = self.engine.is_ca_installed();
         let is_maximized = window.is_maximized();
         let node_count = self.engine.scheduler.snapshot().nodes.len();
-        let outbound_mode = self.engine.telemetry_snapshot().outbound_mode;
+        let tel_snap = self.engine.telemetry_snapshot();
+        let outbound_mode = tel_snap.outbound_mode.clone();
+        if running && tel_snap.down_bps > self.peak_down_bps {
+            self.peak_down_bps = tel_snap.down_bps;
+        }
+        let bps_to_norm = |bps: u64| -> f32 {
+            if bps <= 1024 {
+                return 0.0;
+            }
+            let kb = (bps as f32 / 1024.0).max(10.0);
+            ((kb.log10() - 1.0) / 4.0).clamp(0.0, 1.0)
+        };
+        let target_down_norm = if running {
+            bps_to_norm(tel_snap.down_bps)
+        } else {
+            0.0
+        };
+        let target_up_norm = if running {
+            bps_to_norm(tel_snap.up_bps)
+        } else {
+            0.0
+        };
         let (
             sys_proxy,
             tun_on,
@@ -390,6 +430,23 @@ impl Render for MainView {
             )
         };
 
+        // Dial 3D launch sprint & page-flip state machine
+        let launch_dur_secs = 1.55_f32;
+        if let Some(started) = self.dial_launch_started {
+            let p = started.elapsed().as_secs_f32() / launch_dur_secs;
+            if p >= 0.62 && running {
+                self.dial_show_speed = true;
+            }
+            if p >= 1.0 {
+                self.dial_launch_started = None;
+                if running {
+                    self.dial_show_speed = true;
+                }
+            }
+        } else if !running {
+            self.dial_show_speed = false;
+        }
+
         // Sync state-driven UI animations
         self.anims.sync(
             "sidebar_w",
@@ -399,9 +456,14 @@ impl Render for MainView {
         self.anims
             .sync("sidebar_nav_y", self.page.index() as f32 * 40.0, 190.0);
         self.anims.sync(
-            "picker_h",
-            if self.show_node_picker { 320.0 } else { 0.0 },
-            170.0,
+            "picker_slide",
+            if self.show_node_picker { 1.0 } else { 0.0 },
+            260.0,
+        );
+        self.anims.sync(
+            "dial_page_p",
+            if self.dial_show_speed { 1.0 } else { 0.0 },
+            280.0,
         );
         self.anims.sync(
             "modal_p",
@@ -466,9 +528,14 @@ impl Render for MainView {
             160.0,
         );
 
+        self.anims
+            .sync("dial_down_norm", target_down_norm, 380.0);
+        self.anims.sync("dial_up_norm", target_up_norm, 380.0);
+
         let any_loading = self.is_power_busy()
             || self.engine.is_testing_latency()
-            || self.is_sim429_flashing();
+            || self.is_sim429_flashing()
+            || self.dial_launch_started.is_some();
         if any_loading {
             self.loading_phase = self.loading_epoch.elapsed().as_secs_f32() * 7.5;
         }

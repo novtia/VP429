@@ -86,6 +86,7 @@ pub fn btn_bg() -> Rgba {
 pub fn btn_hover() -> Rgba {
     rgb(0xeceae2)
 }
+#[allow(dead_code)]
 pub fn dark_btn_bg() -> Rgba {
     rgb(0x1e1f1d)
 }
