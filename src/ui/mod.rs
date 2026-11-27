@@ -150,18 +150,31 @@ impl MainView {
             )
         });
 
-        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(450))
-                .await;
-            if !crate::tray::is_window_visible() {
-                continue;
-            }
-            let ok = this.update(cx, |_, cx| {
-                cx.notify();
-            });
-            if ok.is_err() {
-                break;
+        let bus_watch = engine.bus.clone();
+        let eng_watch = engine.clone();
+        cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let mut last_ver = bus_watch.version();
+            let mut sub_ticks: u32 = 0;
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(35))
+                    .await;
+                if !crate::tray::is_window_visible() {
+                    continue;
+                }
+                sub_ticks = sub_ticks.wrapping_add(1);
+                let cur_ver = bus_watch.version();
+                let uptime_tick = eng_watch.is_running() && sub_ticks % 28 == 0;
+                if cur_ver == last_ver && !uptime_tick {
+                    continue;
+                }
+                last_ver = cur_ver;
+                let ok = this.update(cx, |_, cx| {
+                    cx.notify();
+                });
+                if ok.is_err() {
+                    break;
+                }
             }
         })
         .detach();

@@ -84,12 +84,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
           <button
             onClick={onToggleExpand}
-            className={`hw-micro-btn h-6 rounded-[5px] flex items-center justify-center text-[#626058] cursor-pointer ${
-              expanded ? 'w-6' : 'w-full mx-auto'
+            className={`hw-micro-btn rounded-[6px] flex items-center justify-center text-[#626058] cursor-pointer shrink-0 ${
+              expanded ? 'w-7 h-7' : 'w-9 h-9 mx-auto'
             }`}
             title="展开 / 收起侧边栏"
           >
-            {expanded ? <PanelLeftClose size={13} /> : <PanelLeftOpen size={13} />}
+            {expanded ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={16} />}
           </button>
         </div>
 

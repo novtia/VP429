@@ -16,8 +16,11 @@ impl MainView {
             .anims
             .get("tog_chain", if cfg.enable_chain_proxy { 1.0 } else { 0.0 });
         let chain_exit_desc = match &cfg.chain_exit_source {
-            Some(ChainExitSource::SubscriptionNode { name }) => {
+            Some(ChainExitSource::SubscriptionNode { name, .. }) => {
                 format!("当前落地: 订阅节点「{}」（可在「节点列表」更换）", name)
+            }
+            Some(ChainExitSource::ProfilePool { profile_name, .. }) => {
+                format!("当前落地池: 「{}」（支持 429 自动轮换出口 IP）", profile_name)
             }
             Some(ChainExitSource::CustomSpec { .. }) => {
                 "当前落地: 自定义落地节点（前置池 -> 自定义固定出口）".to_string()

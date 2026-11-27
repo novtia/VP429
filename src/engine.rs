@@ -2,16 +2,18 @@ use crate::config::{
     derive_profile_name, AppConfig, ChainExitSource, RotationMode, SubscriptionProfile,
 };
 use crate::mihomo::{
-    detect_other_vpn_tun, download_mihomo_core, is_elevated, MihomoApiClient, MihomoManager,
+    detect_other_vpn_tun_async, download_mihomo_core, ensure_geodata_files, is_elevated,
+    MihomoApiClient, MihomoManager,
 };
 use crate::mitm::ca::CertAuthority;
-use crate::mitm::proxy::{run_proxy_listener, MitmProxyContext};
+use crate::mitm::proxy::{run_proxy_listener_on, MitmProxyContext};
 use crate::scheduler::NodeScheduler;
 use crate::state::EventBus;
 use crate::subscription::{
     fetch_subscription_to_path, generate_mihomo_config, load_cached_subscription,
-    load_cached_subscription_from, parse_custom_exit_proxy, resolve_chain_exit_mapping,
-    ParsedSubscription, CHAIN_EXIT_PROXY_NAME, OUTBOUND_GROUP_NAME, POOL_GROUP_NAME,
+    load_cached_subscription_from, parse_custom_exit_proxy, parse_proxy_pool_to_clash_yaml,
+    resolve_chain_exit_mappings, resolve_chain_exit_pool_names, ParsedSubscription,
+    AUTO_GROUP_NAME, CHAIN_EXIT_PROXY_NAME, OUTBOUND_GROUP_NAME, POOL_GROUP_NAME,
 };
 use crate::sysproxy;
 use anyhow::{anyhow, Result};
@@ -21,6 +23,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::net::TcpListener;
 use tokio::sync::{watch, Mutex};
 
 #[derive(Debug, Clone)]
@@ -59,6 +62,12 @@ struct TrafficSample {
 }
 
 #[derive(Deserialize)]
+struct IpSbResp {
+    ip: Option<String>,
+    country_code: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct IpApiResp {
     query: Option<String>,
     #[serde(rename = "countryCode")]
@@ -76,14 +85,31 @@ fn detect_local_ip() -> String {
     "127.0.0.1".to_string()
 }
 
+fn pick_available_port(preferred: u16) -> u16 {
+    if std::net::TcpListener::bind(("127.0.0.1", preferred)).is_ok() {
+        return preferred;
+    }
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|l| l.local_addr())
+        .map(|a| a.port())
+        .unwrap_or(preferred)
+}
+
+fn is_port_free(port: u16, allow_lan: bool) -> bool {
+    let bind_ip = if allow_lan { "0.0.0.0" } else { "127.0.0.1" };
+    std::net::TcpListener::bind((bind_ip, port)).is_ok()
+}
+
 pub struct ProxyEngine {
     pub config: Arc<RwLock<AppConfig>>,
     pub bus: Arc<EventBus>,
     pub scheduler: Arc<NodeScheduler>,
     pub ca: Arc<CertAuthority>,
     mihomo: Arc<MihomoManager>,
+    core_op_lock: Mutex<()>,
     api_client: RwLock<Option<MihomoApiClient>>,
     runtime_secret: RwLock<Option<String>>,
+    runtime_bound_mixed_port: RwLock<Option<u16>>,
     runtime_has_chain_exit: AtomicBool,
     subscription: RwLock<Option<ParsedSubscription>>,
     telemetry: RwLock<TelemetryInner>,
@@ -114,7 +140,7 @@ impl ProxyEngine {
             scheduler.load_nodes(sub.nodes.clone());
             scheduler.restore_selected_node(config.selected_node.as_deref());
             if config.enable_chain_proxy {
-                if let Some(ChainExitSource::SubscriptionNode { ref name }) =
+                if let Some(ChainExitSource::SubscriptionNode { ref name, .. }) =
                     config.chain_exit_source
                 {
                     scheduler.set_excluded_node(Some(name.clone()));
@@ -122,7 +148,7 @@ impl ProxyEngine {
             }
             bus.info(format!("已从本地缓存加载 {} 个节点", sub.nodes.len()));
         } else {
-            bus.info("欢迎使用 VP429，请前往「配置文件」点击右下角 + 添加订阅 URL");
+            bus.info("欢迎使用 VP429，请前往「配置文件」添加订阅 URL");
         }
 
         let initial_outbound_mode = match config.outbound_mode.as_str() {
@@ -136,8 +162,10 @@ impl ProxyEngine {
             scheduler,
             ca,
             mihomo,
+            core_op_lock: Mutex::new(()),
             api_client: RwLock::new(None),
             runtime_secret: RwLock::new(None),
+            runtime_bound_mixed_port: RwLock::new(None),
             runtime_has_chain_exit: AtomicBool::new(false),
             subscription: RwLock::new(cached_sub),
             telemetry: RwLock::new(TelemetryInner {
@@ -158,6 +186,25 @@ impl ProxyEngine {
             shutdown_tx: Mutex::new(None),
             ca_installed: Arc::new(AtomicBool::new(ca_installed)),
         }))
+    }
+
+    /// Pre-warms a silent background Mihomo standby instance on app launch so node latency tests
+    /// execute in milliseconds with zero cold-start wait, and downloads missing GeoIP/GeoSite DBs.
+    pub fn spawn_warm_up(self: &Arc<Self>, rt: &tokio::runtime::Handle) {
+        let eng = self.clone();
+        rt.spawn(async move {
+            if eng.ensure_standby_core().await.is_ok() && !eng.scheduler.has_any_measured_latency() {
+                eng.ping_all_nodes_inner(true).await;
+            }
+            let proxy_port = if eng.is_running() {
+                Some(eng.config.read().unwrap().local_proxy_port)
+            } else {
+                *eng.runtime_bound_mixed_port.read().unwrap()
+            };
+            if ensure_geodata_files(proxy_port).await {
+                let _ = eng.reload_current_core_config().await;
+            }
+        });
     }
 
     pub fn is_running(&self) -> bool {
@@ -189,13 +236,20 @@ impl ProxyEngine {
         }
     }
 
-    pub async fn select_node_manual(&self, node_name: &str) -> Option<String> {
+    pub async fn select_node_manual(self: &Arc<Self>, node_name: &str) -> Option<String> {
         let switched = self.scheduler.select_manual(node_name).await;
         if let Some(ref name) = switched {
             if let Ok(mut cfg) = self.config.write() {
                 cfg.selected_node = Some(name.clone());
             }
             self.save_config();
+            if self.is_running() {
+                let eng = self.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    eng.check_exit_ip().await;
+                });
+            }
         }
         switched
     }
@@ -209,21 +263,27 @@ impl ProxyEngine {
             cfg.outbound_mode = mode.to_string();
         }
         self.save_config();
-        let api = self.api_client.read().unwrap().clone();
-        if let Some(api) = api {
-            // Note: our `rule` config already routes all non-LAN traffic to VERTEX-POOL while
-            // keeping watch_domains routed through RUST-429-MITM. Switching Mihomo itself to
-            // `global` would skip `rules:` and bypass TUN 429 MITM interception!
-            let mihomo_mode = if mode == "direct" { "direct" } else { "rule" };
-            if let Err(e) = api.set_mode(mihomo_mode).await {
-                self.bus.error(format!("切换出站模式失败: {}", e));
+
+        if self.is_running() {
+            if mode == "direct" {
+                let api_opt = self.api_client.read().unwrap().clone();
+                if let Some(api) = api_opt {
+                    if let Err(e) = api.set_mode("direct").await {
+                        self.bus.error(format!("切换出站模式失败: {}", e));
+                    } else {
+                        self.bus.info("出站模式已切换为: direct（全部直连）");
+                    }
+                }
             } else {
-                if mode == "global" {
-                    let _ = api.select_proxy_group("GLOBAL", OUTBOUND_GROUP_NAME).await;
+                // Reload config so `rule` uses full domestic/overseas split rules while `global` routes all non-LAN traffic via VERTEX-OUTBOUND + 429 MITM
+                if let Err(e) = self.reload_mihomo_runtime().await {
+                    self.bus.error(format!("切换出站模式重载失败: {}", e));
+                } else if mode == "global" {
                     self.bus
                         .info("出站模式已切换为: global（全局代理 + 保留 429 MITM 拦截）");
                 } else {
-                    self.bus.info(format!("出站模式已切换为: {}", mode));
+                    self.bus
+                        .info("出站模式已切换为: rule（原生国内外智能分流 + 429 MITM 拦截）");
                 }
             }
         }
@@ -244,7 +304,9 @@ impl ProxyEngine {
             self.is_running(),
             self.config.read().unwrap().local_proxy_port,
         );
-        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(6));
+        let mut builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .user_agent("curl/8.7.1");
         if running {
             if let Ok(proxy) = reqwest::Proxy::all(format!("http://127.0.0.1:{}", proxy_port)) {
                 builder = builder.proxy(proxy);
@@ -253,25 +315,69 @@ impl ProxyEngine {
             builder = builder.no_proxy();
         }
 
-        let result = async {
+        let probe = async {
             let client = builder.build()?;
-            let resp: IpApiResp = client
+
+            // 1. Primary HTTPS Anycast GeoIP (no shared-IP 45 req/min throttle)
+            if let Ok(resp) = client.get("https://api.ip.sb/geoip").send().await {
+                if resp.status().is_success() {
+                    if let Ok(info) = resp.json::<IpSbResp>().await {
+                        if let Some(ip) = info.ip.filter(|s| !s.trim().is_empty()) {
+                            return Ok::<(String, Option<String>), anyhow::Error>((
+                                ip,
+                                info.country_code,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // 2. Cloudflare global trace endpoint (ultra-fast & reliable on every proxy node)
+            if let Ok(resp) = client
+                .get("https://www.cloudflare.com/cdn-cgi/trace")
+                .send()
+                .await
+            {
+                if resp.status().is_success() {
+                    if let Ok(txt) = resp.text().await {
+                        let mut ip = None;
+                        let mut loc = None;
+                        for line in txt.lines() {
+                            if let Some(v) = line.strip_prefix("ip=") {
+                                ip = Some(v.trim().to_string());
+                            } else if let Some(v) = line.strip_prefix("loc=") {
+                                let code = v.trim();
+                                if !code.is_empty() && code != "XX" {
+                                    loc = Some(code.to_string());
+                                }
+                            }
+                        }
+                        if let Some(ip_str) = ip.filter(|s| !s.is_empty()) {
+                            return Ok((ip_str, loc));
+                        }
+                    }
+                }
+            }
+
+            // 3. Fallback ip-api.com
+            let info: IpApiResp = client
                 .get("http://ip-api.com/json/?fields=status,countryCode,query")
                 .send()
                 .await?
                 .json()
                 .await?;
-            Ok::<_, anyhow::Error>(resp)
+            let ip = info.query.ok_or_else(|| anyhow!("no ip"))?;
+            Ok((ip, info.country_code))
         }
         .await;
 
         {
             let mut t = self.telemetry.write().unwrap();
             t.checking_ip = false;
-            match result {
-                Ok(info) => {
-                    t.exit_ip = info.query;
-                    t.exit_country_code = info.country_code;
+            match probe {
+                Ok((ip, cc)) => {
+                    t.exit_ip = Some(ip);
+                    t.exit_country_code = cc;
                 }
                 Err(_) => {
                     t.exit_ip = Some("检测失败".to_string());
@@ -294,7 +400,13 @@ impl ProxyEngine {
         }
     }
 
-    pub fn update_rotation_policy(&self, mode: RotationMode, cooldown_secs: u64, auto_retry: bool, max_retries: usize) {
+    pub fn update_rotation_policy(
+        &self,
+        mode: RotationMode,
+        cooldown_secs: u64,
+        auto_retry: bool,
+        max_retries: usize,
+    ) {
         if let Ok(mut cfg) = self.config.write() {
             cfg.rotation_mode = mode.clone();
             cfg.cooldown_seconds = cooldown_secs.max(5);
@@ -310,7 +422,8 @@ impl ProxyEngine {
             cfg.watch_domains = domains;
         }
         self.save_config();
-        self.bus.info("已更新选择性 HTTPS MITM 监听域名（重启代理后同步至 TUN 规则）");
+        self.bus
+            .info("已更新选择性 HTTPS MITM 监听域名（保存后自动同步规则）");
         self.bus.notify_state();
     }
 
@@ -386,7 +499,11 @@ impl ProxyEngine {
         cfg.profiles.iter().find(|p| p.id == active_id).cloned()
     }
 
-    pub async fn add_and_sync_profile(&self, raw_name: String, url: String) -> Result<usize> {
+    pub async fn add_and_sync_profile(
+        self: &Arc<Self>,
+        raw_name: String,
+        url: String,
+    ) -> Result<usize> {
         let trimmed_url = url.trim().to_string();
         if trimmed_url.is_empty() {
             return Err(anyhow!("订阅 URL 不能为空"));
@@ -402,7 +519,7 @@ impl ProxyEngine {
         let fallback_port = if self.is_running() {
             Some(self.config.read().unwrap().local_proxy_port)
         } else {
-            None
+            *self.runtime_bound_mixed_port.read().unwrap()
         };
         self.bus.info(format!("正在添加并拉取配置「{}」...", name));
         let (parsed, meta) =
@@ -429,19 +546,113 @@ impl ProxyEngine {
                 used_bytes: meta.upload.saturating_add(meta.download),
                 total_bytes: meta.total,
                 expire_unix: meta.expire,
+                local_used_bytes: 0,
+                local_quota_bytes: 0,
             });
             cfg.active_profile_id = Some(id);
+            cfg.selected_node = None;
         }
         self.save_config();
         self.scheduler.load_nodes(parsed.nodes.clone());
         *self.subscription.write().unwrap() = Some(parsed);
+
+        let _ = self.reload_current_core_config().await;
+        let eng = self.clone();
+        tokio::spawn(async move {
+            eng.ping_all_nodes_inner(true).await;
+        });
+
         self.bus
             .ok(format!("配置「{}」已激活，共 {} 个可用节点", final_name, count));
         self.bus.notify_state();
         Ok(count)
     }
 
-    pub async fn activate_profile(&self, id: &str) -> Result<usize> {
+    pub async fn add_proxy_pool_profile(
+        self: &Arc<Self>,
+        raw_name: String,
+        raw_lines: String,
+        protocol: String,
+        use_current_relay: bool,
+    ) -> Result<usize> {
+        let proto = match protocol.trim().to_ascii_lowercase().as_str() {
+            "socks5" | "socks5h" => "socks5".to_string(),
+            _ => "http".to_string(),
+        };
+        let relay_info = if use_current_relay {
+            let cur_sub = self.subscription.read().unwrap().clone();
+            let cur_node = self.scheduler.current_node_name();
+            match (cur_sub, cur_node) {
+                (Some(sub), Some(node)) => Some((sub, node)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let relay_ref = relay_info
+            .as_ref()
+            .map(|(sub, node)| (sub, node.as_str()));
+        let (yaml_text, parsed) = parse_proxy_pool_to_clash_yaml(&raw_lines, &proto, relay_ref)?;
+        let count = parsed.nodes.len();
+        let final_name = if raw_name.trim().is_empty() {
+            format!("住宅流量池 ({})", count)
+        } else {
+            raw_name.trim().to_string()
+        };
+
+        let id = format!("pool_{:x}", rand::random::<u64>());
+        let cache_path = AppConfig::profile_cache_path(&id);
+        if let Some(parent) = cache_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(&cache_path, &yaml_text)?;
+        let _ = fs::write(AppConfig::subscription_cache_path(), &yaml_text);
+
+        let now_str = chrono::Local::now().format("%m-%d %H:%M").to_string();
+        let now_unix = chrono::Utc::now().timestamp();
+        let pool_url = if let Some((_, ref relay_name)) = relay_info {
+            format!("pool://{} via {} ({} nodes)", proto, relay_name, count)
+        } else {
+            format!("pool://{} ({} nodes)", proto, count)
+        };
+
+        {
+            let mut cfg = self.config.write().unwrap();
+            cfg.subscription_url = pool_url.clone();
+            cfg.profiles.push(SubscriptionProfile {
+                id: id.clone(),
+                name: final_name.clone(),
+                url: pool_url,
+                node_count: count,
+                updated_at: now_str,
+                updated_unix: now_unix,
+                used_bytes: 0,
+                total_bytes: 0,
+                expire_unix: 0,
+                local_used_bytes: 0,
+                local_quota_bytes: 0,
+            });
+            cfg.active_profile_id = Some(id);
+            cfg.selected_node = None;
+        }
+        self.save_config();
+        self.scheduler.load_nodes(parsed.nodes.clone());
+        *self.subscription.write().unwrap() = Some(parsed);
+
+        if let Err(e) = self.reload_current_core_config().await {
+            if self.is_running() {
+                self.bus
+                    .warn_429(format!("流量池已保存，但热重载失败（重启代理生效）: {}", e));
+            }
+        }
+
+        self.bus
+            .ok(format!("流量池「{}」已导入并激活，共 {} 个节点", final_name, count));
+        self.bus.notify_state();
+        Ok(count)
+    }
+
+    pub async fn activate_profile(self: &Arc<Self>, id: &str) -> Result<usize> {
         let (name, url) = {
             let cfg = self.config.read().unwrap();
             let p = cfg
@@ -460,7 +671,7 @@ impl ProxyEngine {
                 let fallback_port = if self.is_running() {
                     Some(self.config.read().unwrap().local_proxy_port)
                 } else {
-                    None
+                    *self.runtime_bound_mixed_port.read().unwrap()
                 };
                 let (p, m) = fetch_subscription_to_path(&url, &cache_path, fallback_port).await?;
                 (p, Some(m))
@@ -487,12 +698,24 @@ impl ProxyEngine {
         self.scheduler.load_nodes(parsed.nodes.clone());
         self.scheduler.restore_selected_node(saved_node.as_deref());
         *self.subscription.write().unwrap() = Some(parsed);
+
+        if let Err(e) = self.reload_current_core_config().await {
+            if self.is_running() {
+                self.bus
+                    .warn_429(format!("配置已切换，但热重载失败（请重启代理）: {}", e));
+            }
+        }
+        let eng = self.clone();
+        tokio::spawn(async move {
+            eng.ping_all_nodes_inner(true).await;
+        });
+
         self.bus.ok(format!("已切换至配置「{}」({} 节点)", name, count));
         self.bus.notify_state();
         Ok(count)
     }
 
-    pub async fn refresh_profile(&self, id: &str) -> Result<usize> {
+    pub async fn refresh_profile(self: &Arc<Self>, id: &str) -> Result<usize> {
         let (name, url, is_active) = {
             let cfg = self.config.read().unwrap();
             let p = cfg
@@ -507,12 +730,16 @@ impl ProxyEngine {
             )
         };
 
+        if url.starts_with("pool://") {
+            return Err(anyhow!("本地流量池配置无需远程更新，如需修改请重新导入"));
+        }
+
         self.bus.info(format!("正在更新配置「{}」...", name));
         let cache_path = AppConfig::profile_cache_path(id);
         let fallback_port = if self.is_running() {
             Some(self.config.read().unwrap().local_proxy_port)
         } else {
-            None
+            *self.runtime_bound_mixed_port.read().unwrap()
         };
         let (parsed, meta) = fetch_subscription_to_path(&url, &cache_path, fallback_port).await?;
         let count = parsed.nodes.len();
@@ -545,6 +772,11 @@ impl ProxyEngine {
             self.scheduler.load_nodes(parsed.nodes.clone());
             self.scheduler.restore_selected_node(saved_node.as_deref());
             *self.subscription.write().unwrap() = Some(parsed);
+            let _ = self.reload_current_core_config().await;
+            let eng = self.clone();
+            tokio::spawn(async move {
+                eng.ping_all_nodes_inner(true).await;
+            });
         }
         self.bus.ok(format!("配置「{}」更新完成，共 {} 个节点", name, count));
         self.bus.notify_state();
@@ -573,15 +805,162 @@ impl ProxyEngine {
         self.bus.notify_state();
     }
 
-    pub async fn download_core(&self) -> Result<()> {
+    pub fn reset_profile_traffic(&self, id: &str) {
+        let name = {
+            let mut cfg = self.config.write().unwrap();
+            let mut found = None;
+            if let Some(p) = cfg.profiles.iter_mut().find(|p| p.id == id) {
+                p.local_used_bytes = 0;
+                found = Some(p.name.clone());
+            }
+            found
+        };
+        self.save_config();
+        if let Some(name) = name {
+            self.bus.info(format!("已清零配置「{}」的本地流量统计", name));
+        }
+        self.bus.notify_state();
+    }
+
+    pub fn set_profile_quota_gb(&self, id: &str, quota_gb: f64) {
+        let bytes = if quota_gb > 0.0 {
+            (quota_gb * 1024.0 * 1024.0 * 1024.0) as u64
+        } else {
+            0
+        };
+        let name = {
+            let mut cfg = self.config.write().unwrap();
+            let mut found = None;
+            if let Some(p) = cfg.profiles.iter_mut().find(|p| p.id == id) {
+                p.local_quota_bytes = bytes;
+                found = Some(p.name.clone());
+            }
+            found
+        };
+        self.save_config();
+        if let Some(name) = name {
+            if bytes > 0 {
+                self.bus
+                    .ok(format!("已将配置「{}」本地流量额度设为 {:.2} GB", name, quota_gb));
+            } else {
+                self.bus.info(format!("已清除配置「{}」的本地流量额度", name));
+            }
+        }
+        self.bus.notify_state();
+    }
+
+    pub async fn download_core(self: &Arc<Self>) -> Result<()> {
         let path = download_mihomo_core(&self.bus).await?;
         {
             let mut cfg = self.config.write().unwrap();
             cfg.mihomo_path = Some(path.to_string_lossy().to_string());
         }
         self.save_config();
+        let _ = self.ensure_standby_core().await;
         self.bus.notify_state();
         Ok(())
+    }
+
+    /// Ensures a lightweight standby Mihomo daemon is running (TUN off, System Proxy off, user port `:7890` untouched).
+    async fn ensure_standby_core(&self) -> Result<MihomoApiClient> {
+        let _guard = self.core_op_lock.lock().await;
+        let existing_opt = self.api_client.read().unwrap().clone();
+        if let Some(existing) = existing_opt {
+            if self.mihomo.is_alive().await && existing.health_check().await {
+                return Ok(existing);
+            }
+        }
+
+        let cfg = self.config.read().unwrap().clone();
+        let mihomo_bin = MihomoManager::resolve_binary_path(&cfg)
+            .ok_or_else(|| anyhow!("未找到 mihomo.exe，请前往「系统设置」下载内核"))?;
+        let sub = self
+            .subscription
+            .read()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| anyhow!("请先同步有效的 Clash 订阅 URL"))?;
+
+        let api_port = pick_available_port(cfg.mihomo_api_port);
+        let standby_mixed = pick_available_port(cfg.mihomo_mixed_port);
+        let standby_bypass = pick_available_port(cfg.mihomo_bypass_port);
+
+        let mut standby_cfg = cfg.clone();
+        standby_cfg.allow_lan = false;
+        standby_cfg.enable_tun = false;
+        standby_cfg.mihomo_api_port = api_port;
+        standby_cfg.mihomo_mixed_port = standby_mixed;
+        standby_cfg.mihomo_bypass_port = standby_bypass;
+
+        let secret = format!("vp429_{:x}", rand::random::<u64>());
+        let standby_yaml = generate_mihomo_config(&sub, &standby_cfg, &secret, false, false)?;
+        let runtime_path = AppConfig::runtime_yaml_path();
+        fs::write(&runtime_path, standby_yaml)?;
+
+        self.mihomo.start(&mihomo_bin, &runtime_path).await?;
+        let api = MihomoApiClient::new(api_port, secret.clone());
+        let mut ready = false;
+        for _ in 0..80 {
+            if api.health_check().await {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        if !ready {
+            self.mihomo.stop().await;
+            return Err(anyhow!("Mihomo 内核启动超时，请检查订阅配置或防火墙"));
+        }
+
+        *self.api_client.write().unwrap() = Some(api.clone());
+        *self.runtime_secret.write().unwrap() = Some(secret);
+        *self.runtime_bound_mixed_port.write().unwrap() = Some(standby_mixed);
+        self.scheduler.set_switcher(Some(Arc::new(api.clone())));
+        let _ = api.select_proxy_group("GLOBAL", OUTBOUND_GROUP_NAME).await;
+        if let Some(cur) = self.scheduler.current_node_name() {
+            let _ = api.select_proxy_group(POOL_GROUP_NAME, &cur).await;
+        } else {
+            let _ = api.select_proxy_group(POOL_GROUP_NAME, AUTO_GROUP_NAME).await;
+        }
+        Ok(api)
+    }
+
+    async fn reload_current_core_config(&self) -> Result<()> {
+        if self.is_running() {
+            self.reload_mihomo_runtime().await
+        } else {
+            let has_api = self.api_client.read().unwrap().is_some();
+            if !has_api {
+                let _ = self.ensure_standby_core().await?;
+                return Ok(());
+            }
+            let _guard = self.core_op_lock.lock().await;
+            let api = self.api_client.read().unwrap().clone();
+            let secret = self.runtime_secret.read().unwrap().clone();
+            let bound_mixed = *self.runtime_bound_mixed_port.read().unwrap();
+            let (Some(api), Some(secret)) = (api, secret) else {
+                return Ok(());
+            };
+            let sub = self
+                .subscription
+                .read()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| anyhow!("当前无有效订阅配置"))?;
+            let mut standby_cfg = self.config.read().unwrap().clone();
+            standby_cfg.allow_lan = false;
+            standby_cfg.enable_tun = false;
+            if let Some(ap) = api.api_port() {
+                standby_cfg.mihomo_api_port = ap;
+            }
+            standby_cfg.mihomo_mixed_port =
+                bound_mixed.unwrap_or(standby_cfg.mihomo_mixed_port);
+            let yaml = generate_mihomo_config(&sub, &standby_cfg, &secret, false, false)?;
+            let runtime_path = AppConfig::runtime_yaml_path();
+            fs::write(&runtime_path, yaml)?;
+            api.reload_config(&runtime_path).await?;
+            Ok(())
+        }
     }
 
     pub async fn start(self: &Arc<Self>) -> Result<()> {
@@ -607,62 +986,116 @@ impl ProxyEngine {
         }
         if !enable_mitm {
             self.bus.info(
-                "本地根证书未安装，已自动使用纯代理直通模式（如需启用 429 自动重试拦截，请前往「429 策略」安装根证书后重启代理）",
+                "本地根证书未安装，已自动使用纯 Mihomo 原生直通模式（如需启用 429 自动重试拦截，请前往「429 策略」安装根证书）",
             );
         }
 
         let mihomo_bin = MihomoManager::resolve_binary_path(&cfg)
-            .ok_or_else(|| anyhow!("未找到 mihomo.exe，请前往「429 轮询与证书」点击下载内核"))?;
+            .ok_or_else(|| anyhow!("未找到 mihomo.exe，请前往「系统设置」点击下载内核"))?;
 
-        let secret = format!("vp429_{:x}", rand::random::<u64>());
-        if let Some(other_tun) = detect_other_vpn_tun() {
-            self.bus.warn_429(format!(
-                "检测到其他 VPN 网卡 ({}) 正在运行，建议先关闭以避免双层代理",
-                other_tun
+        // Fail fast if another proxy app (e.g. FlClash / Clash Verge) is already occupying `local_proxy_port` (`:7890`)
+        let cur_bound = *self.runtime_bound_mixed_port.read().unwrap();
+        if cur_bound != Some(cfg.local_proxy_port)
+            && !is_port_free(cfg.local_proxy_port, cfg.allow_lan)
+        {
+            return Err(anyhow!(
+                "本地代理端口 {} 已被其他软件（如 FlClash）占用，请先关闭其他代理软件或在「系统设置」中修改端口",
+                cfg.local_proxy_port
             ));
         }
-        let runtime_yaml =
-            generate_mihomo_config(&sub, &cfg, &secret, enable_mitm, effective_tun)?;
+
+        // Pre-bind selective 429 MITM sidecar listener on `127.0.0.1:tun_mitm_port` (`:17891`)
+        let mitm_bind_addr = format!("127.0.0.1:{}", cfg.tun_mitm_port);
+        let mitm_listener = TcpListener::bind(&mitm_bind_addr).await.map_err(|e| {
+            anyhow!(
+                "绑定内部 429 MITM 端口 {} 失败 ({})，请检查端口占用",
+                mitm_bind_addr,
+                e
+            )
+        })?;
+
         let has_chain_exit = cfg
             .chain_exit_source
             .as_ref()
-            .map(|s| resolve_chain_exit_mapping(&sub, s).is_ok())
+            .map(|s| resolve_chain_exit_mappings(&sub, s).is_ok())
             .unwrap_or(false);
-        let runtime_path = AppConfig::runtime_yaml_path();
-        fs::write(&runtime_path, runtime_yaml)?;
+        let pool_names = if cfg.enable_chain_proxy && has_chain_exit {
+            cfg.chain_exit_source
+                .as_ref()
+                .map(|s| resolve_chain_exit_pool_names(&sub, s))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        self.scheduler.set_chain_exit_pool(pool_names);
 
-        self.bus.info("正在启动 Mihomo 内核...");
-        self.mihomo.start(&mihomo_bin, &runtime_path).await?;
+        // Mihomo directly binds `cfg.local_proxy_port` (`:7890`) as its native HTTP + SOCKS5 `mixed-port`!
+        let api = {
+            let _guard = self.core_op_lock.lock().await;
+            let warm_api = self.api_client.read().unwrap().clone();
+            let warm_secret = self.runtime_secret.read().unwrap().clone();
 
-        let api = MihomoApiClient::new(cfg.mihomo_api_port, secret.clone());
-        let mut ready = false;
-        for _ in 0..25 {
-            if api.health_check().await {
-                ready = true;
-                break;
+            let mut active_cfg = cfg.clone();
+            active_cfg.mihomo_mixed_port = cfg.local_proxy_port;
+
+            if let (Some(existing_api), Some(existing_secret)) = (warm_api, warm_secret) {
+                if self.mihomo.is_alive().await && existing_api.health_check().await {
+                    if let Some(ap) = existing_api.api_port() {
+                        active_cfg.mihomo_api_port = ap;
+                    }
+                    let runtime_yaml = generate_mihomo_config(
+                        &sub,
+                        &active_cfg,
+                        &existing_secret,
+                        enable_mitm,
+                        effective_tun,
+                    )?;
+                    let runtime_path = AppConfig::runtime_yaml_path();
+                    fs::write(&runtime_path, runtime_yaml)?;
+                    existing_api.reload_config(&runtime_path).await?;
+                    *self.runtime_bound_mixed_port.write().unwrap() = Some(cfg.local_proxy_port);
+                    existing_api
+                } else {
+                    self.spawn_fresh_active_mihomo(
+                        &mihomo_bin,
+                        &sub,
+                        &active_cfg,
+                        enable_mitm,
+                        effective_tun,
+                    )
+                    .await?
+                }
+            } else {
+                self.spawn_fresh_active_mihomo(
+                    &mihomo_bin,
+                    &sub,
+                    &active_cfg,
+                    enable_mitm,
+                    effective_tun,
+                )
+                .await?
             }
-            tokio::time::sleep(Duration::from_millis(150)).await;
-        }
-        if !ready {
-            self.mihomo.stop().await;
-            return Err(anyhow!("Mihomo 内核启动超时，请检查日志"));
-        }
+        };
 
-        *self.api_client.write().unwrap() = Some(api.clone());
-        *self.runtime_secret.write().unwrap() = Some(secret);
         self.runtime_has_chain_exit
             .store(has_chain_exit, Ordering::SeqCst);
         self.scheduler.set_switcher(Some(Arc::new(api.clone())));
-        // Avoid self-loop if chain proxy is enabled on startup with a subscription landing node
+
         if cfg.enable_chain_proxy && has_chain_exit {
-            if let Some(ChainExitSource::SubscriptionNode { ref name }) = cfg.chain_exit_source {
+            if let Some(ChainExitSource::SubscriptionNode { ref name, .. }) = cfg.chain_exit_source
+            {
                 self.scheduler.set_excluded_node(Some(name.clone()));
                 let _ = self.scheduler.ensure_not_excluded().await;
             }
+            if let Some(ref src) = cfg.chain_exit_source {
+                self.scheduler
+                    .set_chain_exit_pool(resolve_chain_exit_pool_names(&sub, src));
+            }
         } else {
             self.scheduler.set_excluded_node(None);
+            self.scheduler.set_chain_exit_pool(Vec::new());
         }
-        // Point Mihomo's built-in GLOBAL group to VERTEX-OUTBOUND
+
         let _ = api.select_proxy_group("GLOBAL", OUTBOUND_GROUP_NAME).await;
         let target_outbound = if cfg.enable_chain_proxy && has_chain_exit {
             CHAIN_EXIT_PROXY_NAME
@@ -672,49 +1105,42 @@ impl ProxyEngine {
         let _ = api
             .select_proxy_group(OUTBOUND_GROUP_NAME, target_outbound)
             .await;
-        if let Some(cur) = self.scheduler.current_node_name() {
-            let _ = api.select_proxy_group(POOL_GROUP_NAME, &cur).await;
+        if self.scheduler.has_any_measured_latency() || cfg.selected_node.is_some() {
+            if let Some(cur) = self.scheduler.current_node_name() {
+                let _ = api.select_proxy_group(POOL_GROUP_NAME, &cur).await;
+            }
+        } else {
+            // Until latency probe completes, let Mihomo's native `url-test` group route to the fastest node!
+            let _ = api.select_proxy_group(POOL_GROUP_NAME, AUTO_GROUP_NAME).await;
         }
 
         let (shut_tx, shut_rx) = watch::channel(false);
         *self.shutdown_tx.lock().await = Some(shut_tx);
 
-        let ctx = MitmProxyContext {
-            config: self.config.clone(),
-            ca: self.ca.clone(),
-            ca_installed: self.ca_installed.clone(),
-            scheduler: self.scheduler.clone(),
-            bus: self.bus.clone(),
-            upstream_tls: MitmProxyContext::build_default_upstream_tls(Vec::new()),
-        };
-
-        // Start user-facing proxy listener (:7890 by default; 0.0.0.0 if allow_lan)
-        let bind_ip = if cfg.allow_lan { "0.0.0.0" } else { "127.0.0.1" };
-        let local_addr = format!("{}:{}", bind_ip, cfg.local_proxy_port);
-        let ctx1 = ctx.clone();
-        let rx1 = shut_rx.clone();
+        // Start selective HTTP/2 + pooled 429 MITM sidecar on `:17891` (reached only by `watch_domains`)
+        let ctx = MitmProxyContext::new(
+            self.config.clone(),
+            self.ca.clone(),
+            self.ca_installed.clone(),
+            self.scheduler.clone(),
+            self.bus.clone(),
+            MitmProxyContext::build_default_upstream_tls(Vec::new()),
+        );
+        let rx_mitm = shut_rx.clone();
         tokio::spawn(async move {
-            let _ = run_proxy_listener(local_addr, false, ctx1, rx1).await;
-        });
-
-        // Start internal TUN-routed MITM listener (:17891)
-        let tun_mitm_addr = format!("127.0.0.1:{}", cfg.tun_mitm_port);
-        let ctx2 = ctx.clone();
-        let rx2 = shut_rx.clone();
-        tokio::spawn(async move {
-            let _ = run_proxy_listener(tun_mitm_addr, true, ctx2, rx2).await;
+            let _ = run_proxy_listener_on(mitm_listener, true, ctx, rx_mitm).await;
         });
 
         // Background interval rotation worker
         let engine_weak = Arc::downgrade(self);
-        let mut rx3 = shut_rx.clone();
+        let mut rx_rot = shut_rx.clone();
         tokio::spawn(async move {
             let mut elapsed_secs: u64 = 0;
             let mut ticker = tokio::time::interval(Duration::from_secs(1));
             loop {
                 tokio::select! {
-                    _ = rx3.changed() => {
-                        if *rx3.borrow() { break; }
+                    _ = rx_rot.changed() => {
+                        if *rx_rot.borrow() { break; }
                     }
                     _ = ticker.tick() => {
                         let Some(eng) = engine_weak.upgrade() else { break; };
@@ -748,7 +1174,7 @@ impl ProxyEngine {
                 self.bus.error(format!("设置 Windows 系统代理失败: {}", e));
             } else {
                 self.bus.ok(format!(
-                    "已启用 Windows 系统代理 -> 127.0.0.1:{}",
+                    "已启用系统代理 -> 127.0.0.1:{} (Mihomo 原生 HTTP/SOCKS5)",
                     cfg.local_proxy_port
                 ));
             }
@@ -767,7 +1193,7 @@ impl ProxyEngine {
             let _ = api.set_mode("direct").await;
         }
 
-        // Stream live bandwidth from Mihomo `/traffic` endpoint
+        // Stream live bandwidth from Mihomo `/traffic`
         let engine_traffic = Arc::downgrade(self);
         let traffic_url = api.traffic_url();
         let traffic_secret = api.secret().to_string();
@@ -780,6 +1206,7 @@ impl ProxyEngine {
             }
             if let Ok(mut resp) = req.send().await {
                 let mut buf = Vec::new();
+                let mut unsaved_ticks: u32 = 0;
                 loop {
                     tokio::select! {
                         _ = rx_traffic.changed() => {
@@ -802,6 +1229,43 @@ impl ProxyEngine {
                                         }
                                         t.speed_history.push_back((sample.up, sample.down));
                                     };
+                                    let delta = sample.up.saturating_add(sample.down);
+                                    if delta > 0 {
+                                        let mut updated = false;
+                                        if let Ok(mut cfg) = eng.config.write() {
+                                            let active_id = cfg.active_profile_id.clone();
+                                            let chain_id = if cfg.enable_chain_proxy {
+                                                match &cfg.chain_exit_source {
+                                                    Some(ChainExitSource::ProfilePool { profile_id, .. }) => {
+                                                        Some(profile_id.clone())
+                                                    }
+                                                    Some(ChainExitSource::SubscriptionNode {
+                                                        profile_id: Some(pid),
+                                                        ..
+                                                    }) => Some(pid.clone()),
+                                                    _ => None,
+                                                }
+                                            } else {
+                                                None
+                                            };
+                                            for p in &mut cfg.profiles {
+                                                let hit_active = active_id.as_deref() == Some(p.id.as_str());
+                                                let hit_chain = chain_id.as_deref() == Some(p.id.as_str());
+                                                if hit_active || hit_chain {
+                                                    p.local_used_bytes = p.local_used_bytes.saturating_add(delta);
+                                                    updated = true;
+                                                }
+                                            }
+                                        }
+                                        if updated {
+                                            unsaved_ticks += 1;
+                                            if unsaved_ticks >= 15 {
+                                                unsaved_ticks = 0;
+                                                eng.save_config();
+                                            }
+                                        }
+                                        eng.bus.notify_state();
+                                    }
                                 }
                             }
                         }
@@ -810,48 +1274,155 @@ impl ProxyEngine {
             }
         });
 
-        // Auto-detect exit IP shortly after start
-        let eng_ip = self.clone();
+        // Non-blocking post-start tasks: check other VPN TUNs, auto-test latencies if untested, and probe exit IP
+        let eng_bg = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(600)).await;
-            eng_ip.check_exit_ip().await;
+            if let Some(other_tun) = detect_other_vpn_tun_async().await {
+                eng_bg.bus.warn_429(format!(
+                    "检测到其他 VPN 虚拟网卡 ({}) 正在运行，建议关闭以避免双层代理",
+                    other_tun
+                ));
+            }
+            if !eng_bg.scheduler.has_any_measured_latency() {
+                eng_bg.ping_all_nodes_inner(true).await;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            eng_bg.check_exit_ip().await;
         });
 
         self.bus.ok(format!(
-            "代理服务已就绪 (本地 :{}, Bypass :{}, TUN: {}, MITM: {})",
+            "代理服务已就绪 (原生 Mixed :{}, 429-MITM :{}, TUN: {})",
             cfg.local_proxy_port,
-            cfg.mihomo_bypass_port,
+            cfg.tun_mitm_port,
             if effective_tun {
                 "ON"
             } else if cfg.enable_tun {
                 "OFF/需管理员"
             } else {
                 "OFF"
-            },
-            if enable_mitm { "ON" } else { "直通" }
+            }
         ));
         self.bus.notify_state();
         Ok(())
     }
 
+    async fn spawn_fresh_active_mihomo(
+        &self,
+        mihomo_bin: &std::path::Path,
+        sub: &ParsedSubscription,
+        active_cfg: &AppConfig,
+        enable_mitm: bool,
+        effective_tun: bool,
+    ) -> Result<MihomoApiClient> {
+        let api_port = pick_available_port(active_cfg.mihomo_api_port);
+        let mut cfg_copy = active_cfg.clone();
+        cfg_copy.mihomo_api_port = api_port;
+
+        let secret = format!("vp429_{:x}", rand::random::<u64>());
+        let runtime_yaml =
+            generate_mihomo_config(sub, &cfg_copy, &secret, enable_mitm, effective_tun)?;
+        let runtime_path = AppConfig::runtime_yaml_path();
+        fs::write(&runtime_path, runtime_yaml)?;
+
+        self.bus.info("正在启动 Mihomo 内核...");
+        self.mihomo.start(mihomo_bin, &runtime_path).await?;
+
+        let api = MihomoApiClient::new(api_port, secret.clone());
+        let mut ready = false;
+        for _ in 0..80 {
+            if api.health_check().await {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        if !ready {
+            self.mihomo.stop().await;
+            return Err(anyhow!("Mihomo 内核启动超时，请检查日志"));
+        }
+
+        *self.api_client.write().unwrap() = Some(api.clone());
+        *self.runtime_secret.write().unwrap() = Some(secret);
+        *self.runtime_bound_mixed_port.write().unwrap() = Some(cfg_copy.mihomo_mixed_port);
+        Ok(api)
+    }
+
+    /// Stops user-facing proxy & TUN immediately while keeping Mihomo warm in standby for instant ping/restart.
     pub async fn stop(&self) {
+        let _ = sysproxy::disable_system_proxy();
         if let Some(tx) = self.shutdown_tx.lock().await.take() {
             let _ = tx.send(true);
         }
-        self.mihomo.stop().await;
-        self.scheduler.set_switcher(None);
-        *self.api_client.write().unwrap() = None;
-        *self.runtime_secret.write().unwrap() = None;
         self.runtime_has_chain_exit.store(false, Ordering::SeqCst);
-        let _ = sysproxy::disable_system_proxy();
         self.running.store(false, Ordering::SeqCst);
+        self.save_config();
+
         if let Ok(mut t) = self.telemetry.write() {
             t.started_at = None;
             t.up_bps = 0;
             t.down_bps = 0;
         }
+
+        // Hot-switch Mihomo back to silent standby (releases `:7890` and closes TUN adapter in ~20ms)
+        let switched_to_standby = {
+            let _guard = self.core_op_lock.lock().await;
+            let api = self.api_client.read().unwrap().clone();
+            let secret = self.runtime_secret.read().unwrap().clone();
+            let sub = self.subscription.read().unwrap().clone();
+            if let (Some(api), Some(secret), Some(sub)) = (api, secret, sub) {
+                let mut standby_cfg = self.config.read().unwrap().clone();
+                let standby_mixed = pick_available_port(standby_cfg.mihomo_mixed_port);
+                standby_cfg.allow_lan = false;
+                standby_cfg.enable_tun = false;
+                standby_cfg.mihomo_mixed_port = standby_mixed;
+                if let Some(ap) = api.api_port() {
+                    standby_cfg.mihomo_api_port = ap;
+                }
+                if let Ok(yaml) = generate_mihomo_config(&sub, &standby_cfg, &secret, false, false)
+                {
+                    let runtime_path = AppConfig::runtime_yaml_path();
+                    if fs::write(&runtime_path, yaml).is_ok()
+                        && api.reload_config(&runtime_path).await.is_ok()
+                    {
+                        api.close_all_connections().await;
+                        *self.runtime_bound_mixed_port.write().unwrap() = Some(standby_mixed);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if !switched_to_standby {
+            self.mihomo.stop().await;
+            self.scheduler.set_switcher(None);
+            *self.api_client.write().unwrap() = None;
+            *self.runtime_secret.write().unwrap() = None;
+            *self.runtime_bound_mixed_port.write().unwrap() = None;
+        }
+
         self.bus.info("代理服务已停止，系统代理已还原");
         self.bus.notify_state();
+    }
+
+    /// Full process termination on application exit.
+    pub async fn shutdown(&self) {
+        let _ = sysproxy::disable_system_proxy();
+        if let Some(tx) = self.shutdown_tx.lock().await.take() {
+            let _ = tx.send(true);
+        }
+        self.running.store(false, Ordering::SeqCst);
+        self.scheduler.set_switcher(None);
+        *self.api_client.write().unwrap() = None;
+        *self.runtime_secret.write().unwrap() = None;
+        *self.runtime_bound_mixed_port.write().unwrap() = None;
+        self.mihomo.stop().await;
+        self.save_config();
     }
 
     pub async fn toggle_system_proxy(&self, enabled: bool) {
@@ -876,8 +1447,9 @@ impl ProxyEngine {
         self.bus.notify_state();
     }
 
-    /// Regenerates `mihomo-runtime.yaml` and hot-reloads the running Mihomo instance via REST API.
-    async fn reload_mihomo_runtime(&self) -> Result<()> {
+    /// Regenerates active `mihomo-runtime.yaml` and hot-reloads the running Mihomo instance via REST API.
+    pub async fn reload_mihomo_runtime(&self) -> Result<()> {
+        let _guard = self.core_op_lock.lock().await;
         let api = self.api_client.read().unwrap().clone();
         let secret = self.runtime_secret.read().unwrap().clone();
         let (Some(api), Some(secret)) = (api, secret) else {
@@ -889,27 +1461,41 @@ impl ProxyEngine {
             .unwrap()
             .clone()
             .ok_or_else(|| anyhow!("当前无有效订阅配置"))?;
-        let cfg = self.config.read().unwrap().clone();
-        let effective_tun = cfg.enable_tun && is_elevated();
+        let mut active_cfg = self.config.read().unwrap().clone();
+        active_cfg.mihomo_mixed_port = active_cfg.local_proxy_port;
+        if let Some(ap) = api.api_port() {
+            active_cfg.mihomo_api_port = ap;
+        }
+        let effective_tun = active_cfg.enable_tun && is_elevated();
         let enable_mitm = self.is_ca_installed();
 
-        let has_chain_exit = cfg
+        let has_chain_exit = active_cfg
             .chain_exit_source
             .as_ref()
-            .map(|s| resolve_chain_exit_mapping(&sub, s).is_ok())
+            .map(|s| resolve_chain_exit_mappings(&sub, s).is_ok())
             .unwrap_or(false);
+        let pool_names = if active_cfg.enable_chain_proxy && has_chain_exit {
+            active_cfg
+                .chain_exit_source
+                .as_ref()
+                .map(|s| resolve_chain_exit_pool_names(&sub, s))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        self.scheduler.set_chain_exit_pool(pool_names);
         let runtime_yaml =
-            generate_mihomo_config(&sub, &cfg, &secret, enable_mitm, effective_tun)?;
+            generate_mihomo_config(&sub, &active_cfg, &secret, enable_mitm, effective_tun)?;
         let runtime_path = AppConfig::runtime_yaml_path();
         fs::write(&runtime_path, runtime_yaml)?;
 
         api.reload_config(&runtime_path).await?;
+        *self.runtime_bound_mixed_port.write().unwrap() = Some(active_cfg.local_proxy_port);
         self.runtime_has_chain_exit
             .store(has_chain_exit, Ordering::SeqCst);
 
-        // Re-apply outbound mode & active proxy selections after hot-reload
         let _ = api.select_proxy_group("GLOBAL", OUTBOUND_GROUP_NAME).await;
-        let target_outbound = if cfg.enable_chain_proxy && has_chain_exit {
+        let target_outbound = if active_cfg.enable_chain_proxy && has_chain_exit {
             CHAIN_EXIT_PROXY_NAME
         } else {
             POOL_GROUP_NAME
@@ -920,9 +1506,10 @@ impl ProxyEngine {
         if let Some(cur) = self.scheduler.current_node_name() {
             let _ = api.select_proxy_group(POOL_GROUP_NAME, &cur).await;
         }
-        if cfg.outbound_mode == "direct" {
+        if active_cfg.outbound_mode == "direct" {
             let _ = api.set_mode("direct").await;
         }
+        self.scheduler.bump_epoch();
         Ok(())
     }
 
@@ -935,7 +1522,7 @@ impl ProxyEngine {
                 return Err(anyhow!(msg));
             };
             if let Some(ref sub) = *self.subscription.read().unwrap() {
-                if let Err(e) = resolve_chain_exit_mapping(sub, src) {
+                if let Err(e) = resolve_chain_exit_mappings(sub, src) {
                     self.bus.error(format!("落地节点不可用: {}", e));
                     return Err(e);
                 }
@@ -949,14 +1536,20 @@ impl ProxyEngine {
         self.save_config();
 
         if enabled {
-            if let Some(ChainExitSource::SubscriptionNode { ref name }) = exit_src {
+            if let Some(ChainExitSource::SubscriptionNode { ref name, .. }) = exit_src {
                 self.scheduler.set_excluded_node(Some(name.clone()));
                 let _ = self.scheduler.ensure_not_excluded().await;
             } else {
                 self.scheduler.set_excluded_node(None);
             }
+            if let (Some(ref sub), Some(ref src)) = (&*self.subscription.read().unwrap(), &exit_src)
+            {
+                self.scheduler
+                    .set_chain_exit_pool(resolve_chain_exit_pool_names(sub, src));
+            }
         } else {
             self.scheduler.set_excluded_node(None);
+            self.scheduler.set_chain_exit_pool(Vec::new());
         }
 
         if self.is_running() {
@@ -978,12 +1571,13 @@ impl ProxyEngine {
                         self.bus.error(format!("热切换链式代理失败: {}", e));
                         return Err(e);
                     }
+                    self.scheduler.bump_epoch();
                 }
             }
 
             let eng_ip = self.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(450)).await;
+                tokio::time::sleep(Duration::from_millis(300)).await;
                 eng_ip.check_exit_ip().await;
             });
         }
@@ -1010,8 +1604,10 @@ impl ProxyEngine {
     ) -> Result<()> {
         let was_enabled = {
             let mut cfg = self.config.write().unwrap();
+            let active_pid = cfg.active_profile_id.clone();
             cfg.chain_exit_source = Some(ChainExitSource::SubscriptionNode {
                 name: node_name.to_string(),
+                profile_id: active_pid,
             });
             cfg.enable_chain_proxy
         };
@@ -1021,6 +1617,7 @@ impl ProxyEngine {
             self.scheduler.set_excluded_node(Some(node_name.to_string()));
             let _ = self.scheduler.ensure_not_excluded().await;
         }
+        self.scheduler.set_chain_exit_pool(Vec::new());
 
         if self.is_running() {
             if let Err(e) = self.reload_mihomo_runtime().await {
@@ -1029,13 +1626,62 @@ impl ProxyEngine {
             } else if was_enabled {
                 let eng_ip = self.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(450)).await;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
                     eng_ip.check_exit_ip().await;
                 });
             }
         }
         self.bus
-            .ok(format!("已将订阅节点「{}」设为链式固定落地出口", node_name));
+            .ok(format!("已将节点「{}」设为跨配置链式落地出口", node_name));
+        self.bus.notify_state();
+        Ok(())
+    }
+
+    pub async fn set_chain_exit_profile_pool(
+        self: &Arc<Self>,
+        profile_id: &str,
+    ) -> Result<()> {
+        let profile_name = {
+            let cfg = self.config.read().unwrap();
+            cfg.profiles
+                .iter()
+                .find(|p| p.id == profile_id)
+                .map(|p| p.name.clone())
+                .ok_or_else(|| anyhow!("未找到指定流量池配置"))?
+        };
+        let src = ChainExitSource::ProfilePool {
+            profile_id: profile_id.to_string(),
+            profile_name: profile_name.clone(),
+        };
+        if let Some(ref sub) = *self.subscription.read().unwrap() {
+            resolve_chain_exit_mappings(sub, &src)?;
+        }
+
+        let was_enabled = {
+            let mut cfg = self.config.write().unwrap();
+            cfg.chain_exit_source = Some(src.clone());
+            cfg.enable_chain_proxy
+        };
+        self.save_config();
+        self.scheduler.set_excluded_node(None);
+        self.scheduler.set_chain_exit_pool(Vec::new());
+
+        if self.is_running() {
+            if let Err(e) = self.reload_mihomo_runtime().await {
+                self.bus
+                    .warn_429(format!("落地流量池已保存，但热重载失败（重启代理后生效）: {}", e));
+            } else if was_enabled {
+                let eng_ip = self.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    eng_ip.check_exit_ip().await;
+                });
+            }
+        }
+        self.bus.ok(format!(
+            "已将「{}」设为跨配置链式落地池（支持 429 自动轮换出口 IP）",
+            profile_name
+        ));
         self.bus.notify_state();
         Ok(())
     }
@@ -1056,6 +1702,7 @@ impl ProxyEngine {
         };
         self.save_config();
         self.scheduler.set_excluded_node(None);
+        self.scheduler.set_chain_exit_pool(Vec::new());
 
         if self.is_running() {
             if let Err(e) = self.reload_mihomo_runtime().await {
@@ -1064,7 +1711,7 @@ impl ProxyEngine {
             } else if was_enabled {
                 let eng_ip = self.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(450)).await;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
                     eng_ip.check_exit_ip().await;
                 });
             }
@@ -1084,6 +1731,7 @@ impl ProxyEngine {
         };
         self.save_config();
         self.scheduler.set_excluded_node(None);
+        self.scheduler.set_chain_exit_pool(Vec::new());
 
         if self.is_running() {
             let api = self.api_client.read().unwrap().clone();
@@ -1091,11 +1739,12 @@ impl ProxyEngine {
                 let _ = api
                     .select_proxy_group(OUTBOUND_GROUP_NAME, POOL_GROUP_NAME)
                     .await;
+                self.scheduler.bump_epoch();
             }
             if was_enabled {
                 let eng_ip = self.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(450)).await;
+                    tokio::time::sleep(Duration::from_millis(300)).await;
                     eng_ip.check_exit_ip().await;
                 });
             }
@@ -1114,6 +1763,10 @@ impl ProxyEngine {
     }
 
     pub async fn ping_all_nodes(&self) {
+        self.ping_all_nodes_inner(false).await;
+    }
+
+    async fn ping_all_nodes_inner(&self, silent: bool) {
         if self
             .testing_latency
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -1126,96 +1779,36 @@ impl ProxyEngine {
         let nodes = self.scheduler.snapshot().nodes;
         if nodes.is_empty() {
             self.testing_latency.store(false, Ordering::SeqCst);
-            self.bus
-                .warn_429("当前没有可测速的节点，请先在「配置文件」中添加并同步订阅");
+            if !silent {
+                self.bus
+                    .warn_429("当前没有可测速的节点，请先在「配置文件」中添加并同步订阅");
+            }
             self.bus.notify_state();
             return;
         }
 
-        // Reuse running Mihomo API if active; otherwise spawn a temporary headless Mihomo
-        // (with TUN disabled) so URL-test measures real end-to-end tunnel latency just like FlClash.
-        let mut temp_mihomo: Option<MihomoManager> = None;
-        let existing_api = self.api_client.read().unwrap().clone();
-        let api = if let Some(existing) = existing_api {
-            existing
-        } else {
-            let cfg = self.config.read().unwrap().clone();
-            let Some(mihomo_bin) = MihomoManager::resolve_binary_path(&cfg) else {
+        // Hit already-warm Mihomo instance immediately (0ms cold-start delay); spawn standby if needed.
+        let api = match self.ensure_standby_core().await {
+            Ok(a) => a,
+            Err(e) => {
                 self.testing_latency.store(false, Ordering::SeqCst);
-                self.bus
-                    .error("未找到 mihomo.exe，请先前往「429 策略」一键下载内核后再测速");
-                self.bus.notify_state();
-                return;
-            };
-            let Some(sub) = self.subscription.read().unwrap().clone() else {
-                self.testing_latency.store(false, Ordering::SeqCst);
-                self.bus.error("请先同步订阅配置后再测速");
-                self.bus.notify_state();
-                return;
-            };
-
-            let temp_api_port = cfg.mihomo_api_port.saturating_add(10);
-            let mut temp_cfg = cfg.clone();
-            temp_cfg.enable_tun = false;
-            temp_cfg.mihomo_api_port = temp_api_port;
-            temp_cfg.mihomo_mixed_port = cfg.mihomo_mixed_port.saturating_add(10);
-            temp_cfg.mihomo_bypass_port = cfg.mihomo_bypass_port.saturating_add(10);
-
-            let secret = format!("vp429_ping_{:x}", rand::random::<u64>());
-            if let Some(other_tun) = detect_other_vpn_tun() {
-                self.bus.warn_429(format!(
-                    "检测到 {} 正在运行，当前测速会叠加双层代理延迟；关闭其他 VPN 后即为真实延迟",
-                    other_tun
-                ));
-            }
-            let temp_yaml_path = AppConfig::data_dir().join("mihomo-ping-temp.yaml");
-            match generate_mihomo_config(&sub, &temp_cfg, &secret, false, false)
-                .and_then(|y| fs::write(&temp_yaml_path, y).map_err(Into::into))
-            {
-                Ok(()) => {}
-                Err(e) => {
-                    self.testing_latency.store(false, Ordering::SeqCst);
-                    self.bus.error(format!("生成临时测速配置失败: {}", e));
-                    self.bus.notify_state();
-                    return;
+                if !silent {
+                    self.bus.error(format!("{}", e));
                 }
-            }
-
-            self.bus.info("正在启动临时 Mihomo 实例进行真连接 URL 测速...");
-            let mgr = MihomoManager::new(self.bus.clone());
-            if let Err(e) = mgr.start(&mihomo_bin, &temp_yaml_path).await {
-                self.testing_latency.store(false, Ordering::SeqCst);
-                self.bus.error(format!("启动临时 Mihomo 失败: {}", e));
                 self.bus.notify_state();
                 return;
             }
-
-            let temp_api = MihomoApiClient::new(temp_api_port, secret);
-            let mut ready = false;
-            for _ in 0..25 {
-                if temp_api.health_check().await {
-                    ready = true;
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(150)).await;
-            }
-            if !ready {
-                mgr.stop().await;
-                self.testing_latency.store(false, Ordering::SeqCst);
-                self.bus.error("临时 Mihomo 测速实例启动超时");
-                self.bus.notify_state();
-                return;
-            }
-            temp_mihomo = Some(mgr);
-            temp_api
         };
 
-        self.bus.info(format!(
-            "正在真连接测速 {} 个节点 (gstatic.com/generate_204)...",
-            nodes.len()
-        ));
+        let started = Instant::now();
+        if !silent {
+            self.bus
+                .info(format!("正在并发测速 {} 个节点...", nodes.len()));
+        }
 
-        let sem = Arc::new(tokio::sync::Semaphore::new(4));
+        // FlClash-style full concurrency (64 parallel goroutine probes, 2600ms timeout):
+        // Healthy 40-150ms nodes resolve and light up in ~100ms without waiting on dead nodes!
+        let sem = Arc::new(tokio::sync::Semaphore::new(64));
         let mut handles = Vec::with_capacity(nodes.len());
         for node in nodes {
             let api = api.clone();
@@ -1223,24 +1816,44 @@ impl ProxyEngine {
             let sem = sem.clone();
             handles.push(tokio::spawn(async move {
                 let _permit = sem.acquire_owned().await;
-                let measured = match api.test_delay(&node.name, 5000).await {
+                let measured = match api.test_delay(&node.name, 2600).await {
                     Ok(ms) if ms > 0 => Some(ms),
-                    _ => Some(0), // 0 = timeout/unreachable
+                    _ => Some(0),
                 };
                 sched.set_latency(&node.name, measured);
+                measured.unwrap_or(0) > 0
             }));
         }
 
+        // Promote fastest early responder after 220ms so active route is optimal before dead nodes time out
+        let sched_early = self.scheduler.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(220)).await;
+            let _ = sched_early.auto_select_fastest_if_needed().await;
+        });
+
+        let mut ok_count = 0usize;
         for h in handles {
-            let _ = h.await;
+            if matches!(h.await, Ok(true)) {
+                ok_count += 1;
+            }
         }
 
-        if let Some(mgr) = temp_mihomo {
-            mgr.stop().await;
+        if let Some((best_name, best_ms)) = self.scheduler.auto_select_fastest_if_needed().await {
+            self.bus.ok(format!(
+                "已自动优选最低延迟节点 -> {} ({} ms)",
+                best_name, best_ms
+            ));
+        } else if !silent {
+            self.bus.ok(format!(
+                "测速完成：{}/{} 可用 (耗时 {} ms)",
+                ok_count,
+                self.scheduler.snapshot().nodes.len(),
+                started.elapsed().as_millis()
+            ));
         }
 
         self.testing_latency.store(false, Ordering::SeqCst);
-        self.bus.ok("全部节点真连接测速完成");
         self.bus.notify_state();
     }
 

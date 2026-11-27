@@ -39,19 +39,34 @@ pub struct SubscriptionProfile {
     pub total_bytes: u64,
     #[serde(default)]
     pub expire_unix: i64,
+    #[serde(default)]
+    pub local_used_bytes: u64,
+    #[serde(default)]
+    pub local_quota_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChainExitSource {
-    SubscriptionNode { name: String },
-    CustomSpec { raw: String },
+    SubscriptionNode {
+        name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile_id: Option<String>,
+    },
+    ProfilePool {
+        profile_id: String,
+        profile_name: String,
+    },
+    CustomSpec {
+        raw: String,
+    },
 }
 
 impl ChainExitSource {
     pub fn short_label(&self) -> String {
         match self {
-            ChainExitSource::SubscriptionNode { name } => name.clone(),
+            ChainExitSource::SubscriptionNode { name, .. } => name.clone(),
+            ChainExitSource::ProfilePool { profile_name, .. } => format!("落地池: {}", profile_name),
             ChainExitSource::CustomSpec { .. } => "自定义落地".to_string(),
         }
     }
@@ -218,6 +233,8 @@ impl AppConfig {
                         used_bytes: 0,
                         total_bytes: 0,
                         expire_unix: 0,
+                        local_used_bytes: 0,
+                        local_quota_bytes: 0,
                     });
                     cfg.active_profile_id = Some(id);
                 }

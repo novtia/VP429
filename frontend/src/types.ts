@@ -45,10 +45,13 @@ export interface SubscriptionProfile {
   used_bytes: number;
   total_bytes: number;
   expire_unix: number;
+  local_used_bytes?: number;
+  local_quota_bytes?: number;
 }
 
 export type ChainExitSource =
-  | { kind: 'subscription_node'; name: string }
+  | { kind: 'subscription_node'; name: string; profile_id?: string | null }
+  | { kind: 'profile_pool'; profile_id: string; profile_name: string }
   | { kind: 'custom_spec'; raw: string };
 
 export interface AppConfigDto {

@@ -1,5 +1,6 @@
 use chrono::Local;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 
@@ -39,23 +40,29 @@ pub enum AppEvent {
 pub struct EventBus {
     logs: RwLock<VecDeque<LogEntry>>,
     tx: broadcast::Sender<AppEvent>,
+    version: AtomicU64,
 }
 
 impl EventBus {
     pub fn new() -> Arc<Self> {
-        let (tx, _) = broadcast::channel(64);
+        let (tx, _) = broadcast::channel(256);
         Arc::new(Self {
             logs: RwLock::new(VecDeque::with_capacity(200)),
             tx,
+            version: AtomicU64::new(1),
         })
     }
 
-    #[allow(dead_code)]
     pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {
         self.tx.subscribe()
     }
 
+    pub fn version(&self) -> u64 {
+        self.version.load(Ordering::Acquire)
+    }
+
     pub fn notify_state(&self) {
+        self.version.fetch_add(1, Ordering::Release);
         let _ = self.tx.send(AppEvent::StateChanged);
     }
 
@@ -75,6 +82,7 @@ impl EventBus {
             }
             guard.push_back(entry.clone());
         }
+        self.version.fetch_add(1, Ordering::Release);
         let _ = self.tx.send(AppEvent::LogAdded(entry));
     }
 

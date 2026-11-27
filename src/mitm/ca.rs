@@ -39,7 +39,6 @@ impl CertAuthority {
                 CertificateParams::from_ca_cert_pem(&cert_pem).context("解析本地 Root CA 证书失败")?;
             let ca_cert = ca_params.self_signed(&ca_key)?;
 
-            // Preserve exact DER from the saved PEM file
             let mut reader = std::io::Cursor::new(cert_pem.as_bytes());
             let ca_der = rustls_pemfile::certs(&mut reader)
                 .next()
@@ -95,7 +94,7 @@ impl CertAuthority {
         &self.ca_der
     }
 
-    /// Generates (or returns cached) a rustls ServerConfig with a leaf cert signed by our Root CA.
+    /// Generates (or returns cached) a rustls ServerConfig with HTTP/2 (`h2`) + `http/1.1` ALPN support.
     pub fn server_config_for_host(&self, host: &str) -> Result<Arc<ServerConfig>> {
         let key = host.to_ascii_lowercase();
         if let Some(existing) = self.cache.get(&key) {
@@ -120,16 +119,18 @@ impl CertAuthority {
         let mut server_cfg = ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(cert_chain, priv_key)?;
-        server_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+        server_cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         let arc = Arc::new(server_cfg);
         self.cache.insert(key, arc.clone());
         Ok(arc)
     }
 
-    /// Installs the Root CA into the current Windows user's Trusted Root Certification Authorities store.
     #[cfg(windows)]
     pub fn install_windows_user_root(&self) -> Result<String> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         let output = std::process::Command::new("certutil")
             .args([
                 "-user",
@@ -137,15 +138,16 @@ impl CertAuthority {
                 "Root",
                 &self.ca_pem_path.to_string_lossy(),
             ])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .context("调用 certutil 安装根证书失败")?;
 
         if output.status.success() {
-            // When running elevated, also install into LocalMachine\Root for system-wide trust
             let mut msg = "已安装到当前用户受信任根证书存储区 (CurrentUser\\Root)".to_string();
             if crate::mihomo::is_elevated() {
                 if let Ok(lm) = std::process::Command::new("certutil")
                     .args(["-addstore", "Root", &self.ca_pem_path.to_string_lossy()])
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output()
                 {
                     if lm.status.success() {
@@ -169,8 +171,12 @@ impl CertAuthority {
 
     #[cfg(windows)]
     pub fn is_installed_windows(&self) -> bool {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
         let Ok(out) = std::process::Command::new("certutil")
             .args(["-user", "-verifystore", "Root", "VP429 Local CA"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
         else {
             return false;

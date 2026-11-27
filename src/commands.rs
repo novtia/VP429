@@ -139,7 +139,10 @@ pub async fn stop_proxy(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn select_node(state: State<'_, AppState>, name: String) -> Result<Option<String>, String> {
+pub async fn select_node(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Option<String>, String> {
     Ok(state.engine.select_node_manual(&name).await)
 }
 
@@ -173,16 +176,36 @@ pub async fn toggle_system_proxy(state: State<'_, AppState>, enabled: bool) -> R
 }
 
 #[tauri::command]
-pub fn toggle_tun(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+pub async fn toggle_tun(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
     {
         let mut c = state.engine.config.write().unwrap();
         c.enable_tun = enabled;
     }
     state.engine.save_config();
-    state.engine.bus.info(format!(
-        "TUN 虚拟网卡已设为 {}（重启代理生效）",
-        if enabled { "开启" } else { "关闭" }
-    ));
+
+    if state.engine.is_running() {
+        if enabled && !is_elevated() {
+            state.engine.bus.warn_429(
+                "TUN 已设为开启，但当前非管理员权限；请点击「提权」以管理员身份重启后生效",
+            );
+        } else if let Err(e) = state.engine.reload_mihomo_runtime().await {
+            state
+                .engine
+                .bus
+                .error(format!("热切换 TUN 模式失败（请尝试重启代理）: {}", e));
+        } else {
+            state.engine.bus.ok(format!(
+                "TUN 虚拟网卡已实时{}",
+                if enabled { "开启" } else { "关闭" }
+            ));
+        }
+    } else {
+        state.engine.bus.info(format!(
+            "TUN 虚拟网卡已设为 {}",
+            if enabled { "开启" } else { "关闭" }
+        ));
+    }
+    state.engine.bus.notify_state();
     Ok(())
 }
 
@@ -204,6 +227,25 @@ pub async fn set_chain_exit_node(
         Some(n) => state
             .engine
             .set_chain_exit_subscription_node(&n)
+            .await
+            .map_err(|e| e.to_string()),
+        None => state
+            .engine
+            .clear_chain_exit()
+            .await
+            .map_err(|e| e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn set_chain_exit_pool(
+    state: State<'_, AppState>,
+    profile_id: Option<String>,
+) -> Result<(), String> {
+    match profile_id {
+        Some(pid) => state
+            .engine
+            .set_chain_exit_profile_pool(&pid)
             .await
             .map_err(|e| e.to_string()),
         None => state
@@ -245,6 +287,21 @@ pub async fn add_profile(
 }
 
 #[tauri::command]
+pub async fn add_proxy_pool(
+    state: State<'_, AppState>,
+    name: String,
+    lines: String,
+    protocol: String,
+    use_current_relay: Option<bool>,
+) -> Result<usize, String> {
+    state
+        .engine
+        .add_proxy_pool_profile(name, lines, protocol, use_current_relay.unwrap_or(false))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn activate_profile(state: State<'_, AppState>, id: String) -> Result<usize, String> {
     state
         .engine
@@ -269,7 +326,23 @@ pub fn delete_profile(state: State<'_, AppState>, id: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn save_strategy(
+pub fn reset_profile_traffic(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.engine.reset_profile_traffic(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_profile_quota(
+    state: State<'_, AppState>,
+    id: String,
+    quota_gb: f64,
+) -> Result<(), String> {
+    state.engine.set_profile_quota_gb(&id, quota_gb);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn save_strategy(
     state: State<'_, AppState>,
     cooldown_seconds: u64,
     max_retries: usize,
@@ -284,6 +357,9 @@ pub fn save_strategy(
     state.engine.update_chain_backoff_ms(chain_backoff_ms);
     if !watch_domains.is_empty() {
         state.engine.update_watch_domains(watch_domains);
+        if state.engine.is_running() {
+            let _ = state.engine.reload_mihomo_runtime().await;
+        }
     }
     state.engine.bus.ok("429 轮询与监听域名配置已保存");
     Ok(())
@@ -355,9 +431,12 @@ pub fn set_sidebar_collapsed(state: State<'_, AppState>, collapsed: bool) -> Res
 }
 
 #[tauri::command]
-pub async fn trigger_elevate(state: State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn trigger_elevate(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     relaunch_as_admin().map_err(|e| e.to_string())?;
-    state.engine.stop().await;
+    state.engine.shutdown().await;
     app.exit(0);
     Ok(())
 }

@@ -3,6 +3,7 @@ use crate::state::EventBus;
 use crate::subscription::POOL_GROUP_NAME;
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
 use std::io::Cursor;
@@ -21,6 +22,14 @@ pub trait ProxySwitcher: Send + Sync {
         &'a self,
         node_name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+    fn select_group_node<'a>(
+        &'a self,
+        _group: &'a str,
+        node_name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        self.select_node(node_name)
+    }
 }
 
 #[derive(Clone)]
@@ -39,6 +48,8 @@ impl MihomoApiClient {
     pub fn new(api_port: u16, secret: String) -> Self {
         let client = reqwest::Client::builder()
             .no_proxy()
+            .pool_max_idle_per_host(128)
+            .tcp_nodelay(true)
             .timeout(Duration::from_secs(6))
             .build()
             .expect("reqwest client");
@@ -49,9 +60,15 @@ impl MihomoApiClient {
         }
     }
 
+    pub fn api_port(&self) -> Option<u16> {
+        self.base_url
+            .rsplit_once(':')
+            .and_then(|(_, p)| p.parse::<u16>().ok())
+    }
+
     pub async fn health_check(&self) -> bool {
         let url = format!("{}/version", self.base_url);
-        let mut req = self.client.get(&url);
+        let mut req = self.client.get(&url).timeout(Duration::from_millis(800));
         if !self.secret.is_empty() {
             req = req.bearer_auth(&self.secret);
         }
@@ -84,7 +101,10 @@ impl MihomoApiClient {
             "{}/proxies/{}/delay?timeout={}&url=http://www.gstatic.com/generate_204",
             self.base_url, encoded, timeout_ms
         );
-        let mut req = self.client.get(&url);
+        let mut req = self
+            .client
+            .get(&url)
+            .timeout(Duration::from_millis(timeout_ms + 800));
         if !self.secret.is_empty() {
             req = req.bearer_auth(&self.secret);
         }
@@ -94,6 +114,33 @@ impl MihomoApiClient {
         }
         let parsed: DelayResp = resp.json().await?;
         Ok(parsed.delay)
+    }
+
+    /// Native Mihomo batch group delay probe (`GET /group/{group}/delay`).
+    #[allow(dead_code)]
+    pub async fn test_group_delay(
+        &self,
+        group: &str,
+        timeout_ms: u64,
+    ) -> Result<HashMap<String, u64>> {
+        let encoded = urlencoding::encode(group);
+        let url = format!(
+            "{}/group/{}/delay?timeout={}&url=http://www.gstatic.com/generate_204",
+            self.base_url, encoded, timeout_ms
+        );
+        let mut req = self
+            .client
+            .get(&url)
+            .timeout(Duration::from_millis(timeout_ms + 1200));
+        if !self.secret.is_empty() {
+            req = req.bearer_auth(&self.secret);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("代理组批量测速超时或不可用"));
+        }
+        let map: HashMap<String, u64> = resp.json().await?;
+        Ok(map)
     }
 
     pub async fn set_mode(&self, mode: &str) -> Result<()> {
@@ -113,7 +160,11 @@ impl MihomoApiClient {
     pub async fn reload_config(&self, config_path: &Path) -> Result<()> {
         let url = format!("{}/configs?force=true", self.base_url);
         let body = serde_json::json!({ "path": config_path.to_string_lossy() });
-        let mut req = self.client.put(&url).json(&body);
+        let mut req = self
+            .client
+            .put(&url)
+            .json(&body)
+            .timeout(Duration::from_secs(12));
         if !self.secret.is_empty() {
             req = req.bearer_auth(&self.secret);
         }
@@ -127,6 +178,15 @@ impl MihomoApiClient {
             return Err(anyhow!("Mihomo 热重载配置失败 ({}): {}", status, text));
         }
         Ok(())
+    }
+
+    pub async fn close_all_connections(&self) {
+        let url = format!("{}/connections", self.base_url);
+        let mut req = self.client.delete(&url);
+        if !self.secret.is_empty() {
+            req = req.bearer_auth(&self.secret);
+        }
+        let _ = req.send().await;
     }
 
     pub fn traffic_url(&self) -> String {
@@ -144,6 +204,14 @@ impl ProxySwitcher for MihomoApiClient {
         node_name: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move { self.select_proxy_group(POOL_GROUP_NAME, node_name).await })
+    }
+
+    fn select_group_node<'a>(
+        &'a self,
+        group: &'a str,
+        node_name: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move { self.select_proxy_group(group, node_name).await })
     }
 }
 
@@ -178,6 +246,16 @@ impl MihomoManager {
         None
     }
 
+    pub async fn is_alive(&self) -> bool {
+        let mut guard = self.child.lock().await;
+        if let Some(ref mut c) = *guard {
+            if let Ok(None) = c.try_wait() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub async fn start(&self, binary: &Path, runtime_yaml: &Path) -> Result<()> {
         self.stop().await;
 
@@ -205,7 +283,7 @@ impl MihomoManager {
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    if line.contains("error") || line.contains("ERR") || line.contains("fatal") {
+                    if line.contains("level=fatal") || line.contains("FTL") {
                         bus.error(format!("[mihomo] {}", line));
                     }
                 }
@@ -250,7 +328,100 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
-/// Downloads the official Windows amd64 mihomo binary into `%LOCALAPPDATA%\vertex-vpn\bin\mihomo.exe`.
+/// Ensures `geoip.metadb` (or `country.mmdb`) and `geosite.dat` exist in `AppConfig::data_dir()`
+/// by downloading from fast domestic-friendly CDN mirrors in the background.
+pub async fn ensure_geodata_files(proxy_port: Option<u16>) -> bool {
+    let data_dir = AppConfig::data_dir();
+    let geoip_target = data_dir.join("geoip.metadb");
+    let geosite_target = data_dir.join("geosite.dat");
+    let has_geoip = geoip_target.exists()
+        || data_dir.join("country.mmdb").exists()
+        || data_dir.join("Country.mmdb").exists();
+    let has_geosite = geosite_target.exists() || data_dir.join("GeoSite.dat").exists();
+
+    if has_geoip && has_geosite {
+        return false;
+    }
+
+    let build_client = |use_proxy: bool| -> Option<reqwest::Client> {
+        let mut b = reqwest::Client::builder()
+            .timeout(Duration::from_secs(25))
+            .user_agent("VP429/0.1");
+        if use_proxy {
+            if let Some(p) = proxy_port {
+                if let Ok(px) = reqwest::Proxy::all(format!("http://127.0.0.1:{}", p)) {
+                    b = b.proxy(px);
+                }
+            }
+        } else {
+            b = b.no_proxy();
+        }
+        b.build().ok()
+    };
+
+    let fetch_first = |urls: &[&str], dst: &Path| {
+        let urls: Vec<String> = urls.iter().map(|s| (*s).to_string()).collect();
+        let dst = dst.to_path_buf();
+        async move {
+            for use_proxy in [false, true] {
+                if use_proxy && proxy_port.is_none() {
+                    continue;
+                }
+                let Some(client) = build_client(use_proxy) else {
+                    continue;
+                };
+                for url in &urls {
+                    if let Ok(resp) = client.get(url).send().await {
+                        if resp.status().is_success() {
+                            if let Ok(bytes) = resp.bytes().await {
+                                if bytes.len() > 64 * 1024 {
+                                    let tmp = dst.with_extension("tmp");
+                                    if fs::write(&tmp, &bytes).is_ok() {
+                                        let _ = fs::rename(&tmp, &dst);
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        }
+    };
+
+    let mut downloaded_any = false;
+    if !has_geoip {
+        let ok = fetch_first(
+            &[
+                "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb",
+                "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb",
+                "https://gcore.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb",
+            ],
+            &geoip_target,
+        )
+        .await;
+        if ok {
+            downloaded_any = true;
+        }
+    }
+    if !has_geosite {
+        let ok = fetch_first(
+            &[
+                "https://testingcf.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+                "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+                "https://gcore.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat",
+            ],
+            &geosite_target,
+        )
+        .await;
+        if ok {
+            downloaded_any = true;
+        }
+    }
+    downloaded_any
+}
+
 pub async fn download_mihomo_core(bus: &EventBus) -> Result<PathBuf> {
     bus.info("正在从 GitHub 获取最新 Mihomo Release 信息...");
     let client = reqwest::Client::builder()
@@ -347,7 +518,6 @@ pub fn is_elevated() -> bool {
     false
 }
 
-/// Relaunches the current executable with UAC elevation (`runas`) on Windows so TUN can be created.
 #[cfg(windows)]
 pub fn relaunch_as_admin() -> Result<()> {
     use std::ffi::OsStr;
@@ -379,44 +549,36 @@ pub fn relaunch_as_admin() -> Result<()> {
     Err(anyhow!("当前平台不支持自动提权"))
 }
 
-/// Detects if another VPN's TUN virtual adapter (e.g. "FlClash Meta Tunnel") is currently Up,
-/// which would cause double-hopped traffic and inflated latency.
+/// Non-blocking background check for other active VPN TUN virtual adapters (never blocks start or ping).
 #[cfg(windows)]
-pub fn detect_other_vpn_tun() -> Option<String> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
+pub async fn detect_other_vpn_tun_async() -> Option<String> {
+    tokio::task::spawn_blocking(|| {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-    let out = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | ForEach-Object { \"$($_.Name)`t$($_.InterfaceDescription)\" }",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
-
-    if !out.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8_lossy(&out.stdout);
-    let vpn_tun_keywords = ["flclash", "clash", "meta tunnel", "wintun", "sing-box"];
-
-    for line in text.lines() {
-        let clean = line.trim_start_matches('\u{feff}').trim();
-        let mut parts = clean.splitn(2, '\t');
-        let name = parts.next().unwrap_or("").trim();
-        let desc = parts.next().unwrap_or("").trim();
-        let combined = format!("{} {}", name, desc).to_ascii_lowercase();
-        if vpn_tun_keywords.iter().any(|kw| combined.contains(kw)) {
-            return Some(name.to_string());
+        let out = std::process::Command::new("ipconfig")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
         }
-    }
-    None
+        let text = String::from_utf8_lossy(&out.stdout);
+        let vpn_tun_keywords = ["flclash", "meta tunnel", "clash", "sing-box"];
+        for line in text.lines() {
+            let lower = line.to_ascii_lowercase();
+            if let Some(kw) = vpn_tun_keywords.iter().find(|&&kw| lower.contains(kw)) {
+                return Some((*kw).to_string());
+            }
+        }
+        None
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[cfg(not(windows))]
-pub fn detect_other_vpn_tun() -> Option<String> {
+pub async fn detect_other_vpn_tun_async() -> Option<String> {
     None
 }

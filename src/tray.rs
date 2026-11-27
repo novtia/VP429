@@ -151,7 +151,7 @@ mod imp {
                         remove_tray_icon();
                         if let Some((eng, rt)) = TRAY_CTX.get() {
                             rt.block_on(async {
-                                eng.stop().await;
+                                eng.shutdown().await;
                             });
                         }
                         PostQuitMessage(0);

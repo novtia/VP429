@@ -24,7 +24,7 @@ required-features = ["lite"]
 tauri = { version = "2", features = [], optional = true }
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11"], optional = true }
 tokio = { version = "1", features = ["full"] }
-hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper = { version = "1", features = ["http1", "http2", "server", "client"] }
 hyper-util = { version = "0.1", features = ["tokio", "http1"] }
 http = "1"
 http-body-util = "0.1"

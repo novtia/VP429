@@ -17,11 +17,18 @@ export const api = {
   toggleTun: (enabled: boolean) => invoke<void>('toggle_tun', { enabled }),
   toggleChainProxy: (enabled: boolean) => invoke<void>('toggle_chain_proxy', { enabled }),
   setChainExitNode: (name: string | null) => invoke<void>('set_chain_exit_node', { name }),
+  setChainExitPool: (profileId: string | null) =>
+    invoke<void>('set_chain_exit_pool', { profileId }),
   setRotationMode: (mode: string) => invoke<void>('set_rotation_mode', { mode }),
   addProfile: (name: string, url: string) => invoke<number>('add_profile', { name, url }),
+  addProxyPool: (name: string, lines: string, protocol: string, useCurrentRelay: boolean) =>
+    invoke<number>('add_proxy_pool', { name, lines, protocol, useCurrentRelay }),
   activateProfile: (id: string) => invoke<number>('activate_profile', { id }),
   refreshProfile: (id: string) => invoke<number>('refresh_profile', { id }),
   deleteProfile: (id: string) => invoke<void>('delete_profile', { id }),
+  resetProfileTraffic: (id: string) => invoke<void>('reset_profile_traffic', { id }),
+  setProfileQuota: (id: string, quotaGb: number) =>
+    invoke<void>('set_profile_quota', { id, quotaGb }),
   saveStrategy: (payload: {
     cooldownSeconds: number;
     maxRetries: number;

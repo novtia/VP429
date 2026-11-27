@@ -1,7 +1,8 @@
 use crate::config::RotationMode;
 use crate::mihomo::ProxySwitcher;
 use crate::state::EventBus;
-use crate::subscription::ProxyNodeMeta;
+use crate::subscription::{ProxyNodeMeta, CHAIN_EXIT_PROXY_NAME};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
@@ -45,6 +46,11 @@ impl NodeEntry {
         }
     }
 
+    fn is_reachable(&self) -> bool {
+        // `None` = untested (assumed candidate), `Some(ms)` where `ms > 0` = verified reachable, `Some(0)` = timeout
+        !matches!(self.latency_ms, Some(0))
+    }
+
     fn cooldown_remaining(&self, now: Instant) -> u64 {
         match self.cooldown_until {
             Some(until) if until > now => (until - now).as_secs().max(1),
@@ -56,7 +62,10 @@ impl NodeEntry {
 struct SchedulerInner {
     nodes: Vec<NodeEntry>,
     active_index: usize,
+    user_pinned: bool,
     excluded_node: Option<String>,
+    chain_exit_nodes: Vec<String>,
+    chain_exit_index: usize,
     mode: RotationMode,
     cooldown: Duration,
     total_429: u64,
@@ -66,6 +75,7 @@ struct SchedulerInner {
 
 pub struct NodeScheduler {
     inner: RwLock<SchedulerInner>,
+    epoch: AtomicU64,
     bus: Arc<EventBus>,
 }
 
@@ -75,15 +85,29 @@ impl NodeScheduler {
             inner: RwLock::new(SchedulerInner {
                 nodes: Vec::new(),
                 active_index: 0,
+                user_pinned: false,
                 excluded_node: None,
+                chain_exit_nodes: Vec::new(),
+                chain_exit_index: 0,
                 mode,
                 cooldown: Duration::from_secs(cooldown_secs.max(1)),
                 total_429: 0,
                 total_retries_ok: 0,
                 switcher: None,
             }),
+            epoch: AtomicU64::new(1),
             bus,
         })
+    }
+
+    /// Monotonically increments whenever the active exit route changes so pooled MITM upstream
+    /// connections immediately dial through the newly selected exit IP.
+    pub fn route_epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Acquire)
+    }
+
+    pub fn bump_epoch(&self) {
+        self.epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     pub fn set_excluded_node(&self, node_name: Option<String>) {
@@ -93,7 +117,6 @@ impl NodeScheduler {
         self.bus.notify_state();
     }
 
-    /// Ensures the active front-end node is not the excluded landing node (avoids chain self-loop).
     pub async fn ensure_not_excluded(&self) -> Option<String> {
         let (target_name, switcher) = {
             let mut g = self.inner.write().ok()?;
@@ -117,6 +140,7 @@ impl NodeScheduler {
             g.active_index = next_idx;
             (g.nodes[next_idx].meta.name.clone(), g.switcher.clone())
         };
+        self.bump_epoch();
         self.bus.info(format!(
             "为避免链式代理自环，前置节点已自动切换至 {}",
             target_name
@@ -126,7 +150,6 @@ impl NodeScheduler {
         Some(switched)
     }
 
-    /// Records a 429 hit when chain proxy is active (fixed exit IP: no cooldown or exit rotation).
     pub fn record_429_fixed_exit(&self, target_host: &str) {
         if let Ok(mut g) = self.inner.write() {
             g.total_429 += 1;
@@ -136,6 +159,50 @@ impl NodeScheduler {
             target_host
         ));
         self.bus.notify_state();
+    }
+
+    pub fn set_chain_exit_pool(&self, nodes: Vec<String>) {
+        if let Ok(mut g) = self.inner.write() {
+            g.chain_exit_nodes = nodes;
+            g.chain_exit_index = 0;
+        }
+        self.bump_epoch();
+        self.bus.notify_state();
+    }
+
+    pub fn has_chain_exit_pool(&self) -> bool {
+        self.inner
+            .read()
+            .map(|g| g.chain_exit_nodes.len() > 1)
+            .unwrap_or(false)
+    }
+
+    pub async fn report_429_chain_exit(&self, target_host: &str) -> Option<String> {
+        let (next_name, switcher) = {
+            let mut g = self.inner.write().ok()?;
+            g.total_429 += 1;
+            if g.chain_exit_nodes.len() <= 1 {
+                return None;
+            }
+            g.chain_exit_index = (g.chain_exit_index + 1) % g.chain_exit_nodes.len();
+            (
+                g.chain_exit_nodes[g.chain_exit_index].clone(),
+                g.switcher.clone(),
+            )
+        };
+        self.bump_epoch();
+        self.bus.warn_429(format!(
+            "{} 命中 429 -> 链式落地池切换至 {}",
+            target_host, next_name
+        ));
+        if let Some(sw) = switcher {
+            if let Err(err) = sw.select_group_node(CHAIN_EXIT_PROXY_NAME, &next_name).await {
+                self.bus
+                    .error(format!("切换链式落地节点 {} 失败: {}", next_name, err));
+            }
+        }
+        self.bus.notify_state();
+        Some(next_name)
     }
 
     pub fn set_switcher(&self, switcher: Option<Arc<dyn ProxySwitcher>>) {
@@ -165,11 +232,12 @@ impl NodeScheduler {
                 })
                 .collect();
             g.active_index = 0;
+            g.user_pinned = false;
         }
+        self.bump_epoch();
         self.bus.notify_state();
     }
 
-    /// Restores the previously persisted active node if it exists in the current node list.
     pub fn restore_selected_node(&self, node_name: Option<&str>) {
         let Some(target) = node_name else {
             return;
@@ -177,6 +245,7 @@ impl NodeScheduler {
         if let Ok(mut g) = self.inner.write() {
             if let Some(idx) = g.nodes.iter().position(|n| n.meta.name == target) {
                 g.active_index = idx;
+                g.user_pinned = true;
             }
         }
         self.bus.notify_state();
@@ -189,6 +258,62 @@ impl NodeScheduler {
             }
         }
         self.bus.notify_state();
+    }
+
+    /// Automatically promotes the fastest verified healthy node if the user hasn't manually pinned
+    /// a healthy node (or if the currently active node timed out / is unreachable).
+    pub async fn auto_select_fastest_if_needed(&self) -> Option<(String, u64)> {
+        let (chosen_name, chosen_ms, switcher) = {
+            let mut g = self.inner.write().ok()?;
+            if g.nodes.is_empty() {
+                return None;
+            }
+            let now = Instant::now();
+            let cur_timed_out = g
+                .nodes
+                .get(g.active_index)
+                .map(|n| matches!(n.latency_ms, Some(0)))
+                .unwrap_or(true);
+            if g.user_pinned && !cur_timed_out {
+                return None;
+            }
+            let excl = g.excluded_node.as_deref();
+            let (best_idx, best_ms) = g
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| {
+                    n.is_ready(now)
+                        && (g.nodes.len() <= 1 || excl != Some(n.meta.name.as_str()))
+                })
+                .filter_map(|(i, n)| match n.latency_ms {
+                    Some(ms) if ms > 0 => Some((i, ms)),
+                    _ => None,
+                })
+                .min_by_key(|(_, ms)| *ms)?;
+
+            if best_idx == g.active_index {
+                return None;
+            }
+            g.active_index = best_idx;
+            (
+                g.nodes[best_idx].meta.name.clone(),
+                best_ms,
+                g.switcher.clone(),
+            )
+        };
+
+        self.bump_epoch();
+        let _ = self.apply_switch(chosen_name.clone(), switcher).await;
+        self.bus.notify_state();
+        Some((chosen_name, chosen_ms))
+    }
+
+    pub fn has_any_measured_latency(&self) -> bool {
+        self.inner
+            .read()
+            .map(|g| g.nodes.iter().any(|n| n.latency_ms.is_some()))
+            .unwrap_or(false)
     }
 
     pub fn current_node_name(&self) -> Option<String> {
@@ -208,8 +333,6 @@ impl NodeScheduler {
         self.bus.notify_state();
     }
 
-    /// Called before forwarding an intercepted request.
-    /// In `RoundRobinPerRequest` mode, advances to the next ready node and updates the backend switcher.
     pub async fn prepare_for_request(&self) -> Option<String> {
         let (target_name, switcher, needs_switch) = {
             let mut g = self.inner.write().ok()?;
@@ -229,7 +352,9 @@ impl NodeScheduler {
                     g.switcher.clone(),
                     true,
                 )
-            } else if !g.nodes[g.active_index].is_ready(now) {
+            } else if !g.nodes[g.active_index].is_ready(now)
+                || !g.nodes[g.active_index].is_reachable()
+            {
                 if let Some(next_idx) =
                     Self::find_next_ready(&g.nodes, g.active_index, now, excl.as_deref())
                 {
@@ -248,14 +373,13 @@ impl NodeScheduler {
         };
 
         if needs_switch {
+            self.bump_epoch();
             Some(self.apply_switch(target_name, switcher).await)
         } else {
             Some(target_name)
         }
     }
 
-    /// Called when an upstream response returns HTTP 429 (or configured rate-limit status).
-    /// Puts `offending_node` on cooldown, selects the next healthy node, and switches mihomo.
     pub async fn report_429(&self, offending_node: &str, target_host: &str) -> Option<String> {
         let (next_name, cooldown_secs, switcher, all_cooled) = {
             let mut g = self.inner.write().ok()?;
@@ -283,7 +407,6 @@ impl NodeScheduler {
                 match Self::find_next_ready(&g.nodes, off_idx, now, excl.as_deref()) {
                     Some(idx) => (idx, false),
                     None => {
-                        // Fallback: pick node with earliest cooldown_until (excluding current/excluded if possible)
                         let best = g
                             .nodes
                             .iter()
@@ -292,8 +415,20 @@ impl NodeScheduler {
                                 (g.nodes.len() == 1 || *i != off_idx)
                                     && (g.nodes.len() <= 1
                                         || excl.as_deref() != Some(n.meta.name.as_str()))
+                                    && n.is_reachable()
                             })
                             .min_by_key(|(_, n)| n.cooldown_until.unwrap_or(now))
+                            .or_else(|| {
+                                g.nodes
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, n)| {
+                                        (g.nodes.len() == 1 || *i != off_idx)
+                                            && (g.nodes.len() <= 1
+                                                || excl.as_deref() != Some(n.meta.name.as_str()))
+                                    })
+                                    .min_by_key(|(_, n)| n.cooldown_until.unwrap_or(now))
+                            })
                             .map(|(i, _)| i)
                             .unwrap_or(0);
                         (best, true)
@@ -309,13 +444,14 @@ impl NodeScheduler {
             )
         };
 
+        self.bump_epoch();
         self.bus.warn_429(format!(
             "{} 命中 429 -> {} 进入冷却 {}s，切换至 {}",
             target_host, offending_node, cooldown_secs, next_name
         ));
         if all_cooled {
             self.bus
-                .warn_429("所有节点均处于 429 冷却中，已回退至最快解冻节点");
+                .warn_429("所有可用节点均处于 429 冷却中，已回退至最快解冻节点");
         }
 
         let switched = self.apply_switch(next_name, switcher).await;
@@ -351,6 +487,7 @@ impl NodeScheduler {
             )
         };
 
+        self.bump_epoch();
         self.bus.info(format!("{} -> {}", reason, next_name));
         let switched = self.apply_switch(next_name, switcher).await;
         self.bus.notify_state();
@@ -362,8 +499,10 @@ impl NodeScheduler {
             let mut g = self.inner.write().ok()?;
             let idx = g.nodes.iter().position(|n| n.meta.name == node_name)?;
             g.active_index = idx;
+            g.user_pinned = true;
             (g.nodes[idx].meta.name.clone(), g.switcher.clone())
         };
+        self.bump_epoch();
         self.bus.info(format!("手动切换出口节点 -> {}", target_name));
         let switched = self.apply_switch(target_name, switcher).await;
         self.bus.notify_state();
@@ -391,9 +530,9 @@ impl NodeScheduler {
             .enumerate()
             .map(|(i, n)| {
                 let cd = n.cooldown_remaining(now);
-                if cd == 0 {
+                if cd == 0 && n.is_reachable() {
                     ready_count += 1;
-                } else {
+                } else if cd > 0 {
                     cooldown_count += 1;
                 }
                 NodeSnapshot {
@@ -420,6 +559,7 @@ impl NodeScheduler {
         }
     }
 
+    /// Finds the next ready & reachable node (skipping known `0ms` timeout nodes whenever possible).
     fn find_next_ready(
         nodes: &[NodeEntry],
         from: usize,
@@ -430,6 +570,17 @@ impl NodeScheduler {
         if len == 0 {
             return None;
         }
+        // Pass 1: ready AND reachable (`latency_ms != Some(0)`)
+        for step in 1..=len {
+            let idx = (from + step) % len;
+            if len > 1 && excluded == Some(nodes[idx].meta.name.as_str()) {
+                continue;
+            }
+            if nodes[idx].is_ready(now) && nodes[idx].is_reachable() {
+                return Some(idx);
+            }
+        }
+        // Pass 2: fallback to any non-cooled node if all nodes previously timed out
         for step in 1..=len {
             let idx = (from + step) % len;
             if len > 1 && excluded == Some(nodes[idx].meta.name.as_str()) {
@@ -512,13 +663,11 @@ mod tests {
 
         assert_eq!(sched.current_node_name().as_deref(), Some("Node-A"));
 
-        // Node-A hits 429 -> should rotate to Node-B
         let next = sched
             .report_429("Node-A", "aiplatform.googleapis.com")
             .await;
         assert_eq!(next.as_deref(), Some("Node-B"));
 
-        // Node-B hits 429 -> should rotate to Node-C (skipping cooled Node-A)
         let next2 = sched
             .report_429("Node-B", "aiplatform.googleapis.com")
             .await;
@@ -546,24 +695,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_auto_select_fastest_and_skip_timeout() {
+        let bus = EventBus::new();
+        let sched = NodeScheduler::new(RotationMode::On429Only, 60, bus);
+        sched.load_nodes(sample_nodes());
+        sched.set_latency("Node-A", Some(0)); // timeout
+        sched.set_latency("Node-B", Some(120));
+        sched.set_latency("Node-C", Some(38));
+
+        let chosen = sched.auto_select_fastest_if_needed().await;
+        assert_eq!(chosen, Some(("Node-C".to_string(), 38)));
+        assert_eq!(sched.current_node_name().as_deref(), Some("Node-C"));
+
+        // Rotating from Node-C skips Node-A (timeout) and lands on Node-B
+        let rotated = sched.rotate_next("test").await;
+        assert_eq!(rotated.as_deref(), Some("Node-B"));
+    }
+
+    #[tokio::test]
     async fn test_chain_exclusion_and_fixed_exit_429() {
         let bus = EventBus::new();
         let sched = NodeScheduler::new(RotationMode::On429Only, 60, bus);
         sched.load_nodes(sample_nodes());
         assert_eq!(sched.current_node_name().as_deref(), Some("Node-A"));
 
-        // Exclude Node-A (set as landing node) -> front-end automatically avoids self-loop
         sched.set_excluded_node(Some("Node-A".into()));
         let front = sched.ensure_not_excluded().await;
         assert_eq!(front.as_deref(), Some("Node-B"));
 
-        // Rotating front-end skips Node-A
         let r1 = sched.rotate_next("test").await;
         assert_eq!(r1.as_deref(), Some("Node-C"));
         let r2 = sched.rotate_next("test").await;
         assert_eq!(r2.as_deref(), Some("Node-B"));
 
-        // Fixed exit 429 records counter without cooling down or switching
         sched.record_429_fixed_exit("aiplatform.googleapis.com");
         let snap = sched.snapshot();
         assert_eq!(snap.total_429, 1);

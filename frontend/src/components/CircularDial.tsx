@@ -29,6 +29,215 @@ interface CircularDialProps {
 const LAUNCH_DUR = 1650;
 const STOP_DUR = 920;
 
+// ---- Shared precision-instrument rendering helpers (light source: top-left) ----
+function lipGrad(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  aTL: number,
+  aBR: number
+) {
+  const g = ctx.createLinearGradient(cx - r * 0.72, cy - r * 0.72, cx + r * 0.72, cy + r * 0.72);
+  g.addColorStop(0, `rgba(255, 255, 255, ${aTL})`);
+  g.addColorStop(0.5, `rgba(255, 255, 255, ${((aTL + aBR) * 0.25).toFixed(3)})`);
+  g.addColorStop(1, `rgba(255, 255, 255, ${aBR})`);
+  return g;
+}
+
+// Milled recessed channel: dark wall, matte floor, light-catching lips
+function drawGroove(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  a0: number,
+  a1: number,
+  width: number
+) {
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, a0, a1);
+  ctx.strokeStyle = '#070807';
+  ctx.lineWidth = width;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 0.6, a0, a1);
+  ctx.strokeStyle = '#181a17';
+  ctx.lineWidth = width - 2.6;
+  ctx.stroke();
+  // Floor sheen
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, a0, a1);
+  ctx.strokeStyle = lipGrad(ctx, cx, cy, r, 0.0, 0.035);
+  ctx.lineWidth = width * 0.35;
+  ctx.stroke();
+  ctx.lineCap = 'butt';
+  // Outer lip (lit at bottom-right) & inner lip (lit at top-left)
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + width / 2 + 0.6, a0, a1);
+  ctx.strokeStyle = lipGrad(ctx, cx, cy, r, 0.015, 0.11);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r - width / 2 - 0.6, a0, a1);
+  ctx.strokeStyle = lipGrad(ctx, cx, cy, r, 0.1, 0.015);
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Applied index with cast shadow and a polished facet highlight
+function drawTick(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  ang: number,
+  r1: number,
+  r2: number,
+  width: number,
+  color: string,
+  sheen = 0
+) {
+  const c = Math.cos(ang),
+    s = Math.sin(ang);
+  ctx.save();
+  ctx.lineCap = 'butt';
+  ctx.beginPath();
+  ctx.moveTo(cx + c * r1 + 0.7, cy + s * r1 + 1.3);
+  ctx.lineTo(cx + c * r2 + 0.7, cy + s * r2 + 1.3);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+  ctx.lineWidth = width + 0.8;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx + c * r1, cy + s * r1);
+  ctx.lineTo(cx + c * r2, cy + s * r2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.stroke();
+  if (sheen > 0) {
+    let nx = -s,
+      ny = c;
+    if (nx + ny > 0) {
+      nx = -nx;
+      ny = -ny;
+    } // flip toward top-left light
+    const o = width * 0.26;
+    ctx.beginPath();
+    ctx.moveTo(cx + c * r1 + nx * o, cy + s * r1 + ny * o);
+    ctx.lineTo(cx + c * r2 + nx * o, cy + s * r2 + ny * o);
+    ctx.strokeStyle = `rgba(255, 255, 255, ${sheen})`;
+    ctx.lineWidth = Math.max(0.8, width * 0.38);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Illuminated light-pipe arc with specular core
+function drawLitArc(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  r: number,
+  a0: number,
+  a1: number,
+  width: number,
+  color: string | CanvasGradient,
+  glow: string | null,
+  core = 'rgba(255, 255, 255, 0.34)'
+) {
+  if (a1 - a0 < 0.002) return;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, a0, a1);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  if (glow) {
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = 14;
+  }
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + width * 0.08, a0, a1);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.18)';
+  ctx.lineWidth = width * 0.5;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, r - width * 0.2, a0, a1);
+  ctx.strokeStyle = core;
+  ctx.lineWidth = Math.max(1, width * 0.2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// Faceted (two-tone) tapered hand with drop shadow
+function drawPointer(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  ang: number,
+  r0: number,
+  r1: number,
+  color: string,
+  glow: string | null
+) {
+  const c = Math.cos(ang),
+    s = Math.sin(ang);
+  const nx = -s,
+    ny = c;
+  const w0 = 3.8,
+    w1 = 1.3;
+  const P = (r: number, w: number): [number, number] => [cx + c * r + nx * w, cy + s * r + ny * w];
+  const tip = P(r1 + 2.2, 0);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(...P(r0, w0));
+  ctx.lineTo(...P(r1, w1));
+  ctx.lineTo(...tip);
+  ctx.lineTo(...P(r1, -w1));
+  ctx.lineTo(...P(r0, -w0));
+  ctx.closePath();
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetX = 1.5;
+  ctx.shadowOffsetY = 3;
+  ctx.fillStyle = color;
+  ctx.fill();
+  if (glow) {
+    ctx.shadowColor = glow;
+    ctx.shadowBlur = 12;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.fill();
+  }
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  const sg = nx + ny > 0 ? -1 : 1; // side facing light
+  ctx.beginPath();
+  ctx.moveTo(...P(r0, 0));
+  ctx.lineTo(...P(r0, w0 * sg));
+  ctx.lineTo(...P(r1, w1 * sg));
+  ctx.lineTo(...tip);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.30)';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(...P(r0, 0));
+  ctx.lineTo(...P(r0, -w0 * sg));
+  ctx.lineTo(...P(r1, -w1 * sg));
+  ctx.lineTo(...tip);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+  ctx.fill();
+  ctx.restore();
+}
+
 export const CircularDial: React.FC<CircularDialProps> = ({
   data,
   dialPage,
@@ -349,78 +558,74 @@ export const CircularDial: React.FC<CircularDialProps> = ({
         pCtx.fillStyle = bgGlow;
         pCtx.fillRect(0, 0, w, h);
 
+        // Outer chapter-ring hairline (matches speedometer r=280)
         pCtx.beginPath();
         pCtx.arc(cx, cy, 280, 0, Math.PI * 2);
-        pCtx.strokeStyle = 'rgba(255,255,255,0.06)';
-        pCtx.lineWidth = 2;
+        pCtx.strokeStyle = lipGrad(pCtx, cx, cy, 280, 0.03, 0.09);
+        pCtx.lineWidth = 1.5;
         pCtx.stroke();
 
         const startAng = (152 * Math.PI) / 180;
         const endAng = (388 * Math.PI) / 180;
         const sweep = endAng - startAng;
 
+        // Printed minute-track boundary
+        pCtx.beginPath();
+        pCtx.arc(cx, cy, 275, startAng, endAng);
+        pCtx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+        pCtx.lineWidth = 1;
+        pCtx.stroke();
+
+        // Applied chapter indices with cast shadows & polished facets
+        const majorCol = running && !cur.stopping ? 'rgba(110, 224, 152, 0.9)' : 'rgba(255, 118, 76, 0.92)';
         for (let i = 0; i <= 40; i++) {
           const ang = startAng + (i / 40) * sweep;
           const isMajor = i % 10 === 0;
           const isMid = i % 5 === 0 && !isMajor;
-          const r1 = 272;
-          const r2 = isMajor ? 260 : isMid ? 263 : 266;
-          pCtx.beginPath();
-          pCtx.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
-          pCtx.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
-          pCtx.strokeStyle = isMajor
-            ? running && !cur.stopping
-              ? 'rgba(91,214,138,0.58)'
-              : 'rgba(255,106,61,0.62)'
-            : isMid
-            ? '#5c5e58'
-            : '#343632';
-          pCtx.lineWidth = isMajor ? 2.6 : isMid ? 1.6 : 1.2;
-          pCtx.stroke();
+          if (isMajor) drawTick(pCtx, cx, cy, ang, 273, 257, 4.2, majorCol, 0.42);
+          else if (isMid) drawTick(pCtx, cx, cy, ang, 273, 262, 1.9, '#6d6f69', 0.18);
+          else drawTick(pCtx, cx, cy, ang, 273, 267, 1.2, '#41433f');
         }
 
-        pCtx.lineCap = 'round';
-        pCtx.beginPath();
-        pCtx.arc(cx, cy, 248, startAng, endAng);
-        pCtx.strokeStyle = '#232522';
-        pCtx.lineWidth = 6.5;
-        pCtx.stroke();
+        // Milled recessed outer track (r=248)
+        drawGroove(pCtx, cx, cy, 248, startAng, endAng, 8.5);
 
         if (cur.stopping) {
           const remain = Math.max(0, 1 - Math.pow(stopP, 0.75));
           if (remain > 0.01) {
-            pCtx.save();
-            pCtx.beginPath();
-            pCtx.arc(cx, cy, 248, startAng, startAng + sweep * remain);
-            pCtx.strokeStyle = stopP < 0.45 ? '#5bd68a' : '#ff6a3d';
-            pCtx.lineWidth = 6.5;
-            pCtx.shadowColor = stopP < 0.45 ? 'rgba(91,214,138,0.7)' : 'rgba(255,106,61,0.75)';
-            pCtx.shadowBlur = 12;
-            pCtx.stroke();
-            pCtx.restore();
+            const green = stopP < 0.45;
+            drawLitArc(
+              pCtx,
+              cx,
+              cy,
+              248,
+              startAng,
+              startAng + sweep * remain,
+              6,
+              green ? '#5bd68a' : '#ff6a3d',
+              green ? 'rgba(91, 214, 138, 0.7)' : 'rgba(255, 106, 61, 0.75)'
+            );
           }
         } else if (cur.launching && launchP > 0.01) {
-          pCtx.save();
-          pCtx.beginPath();
-          pCtx.arc(cx, cy, 248, startAng, startAng + sweep * launchP);
-          pCtx.strokeStyle = '#ff7b4d';
-          pCtx.lineWidth = 6.5;
-          pCtx.shadowColor = 'rgba(255,106,61,0.75)';
-          pCtx.shadowBlur = 14;
-          pCtx.stroke();
-          pCtx.restore();
+          const g = pCtx.createLinearGradient(cx - 248, cy, cx + 248, cy);
+          g.addColorStop(0, '#c9380f');
+          g.addColorStop(0.55, '#ff6a3d');
+          g.addColorStop(1, '#ffa27d');
+          drawLitArc(pCtx, cx, cy, 248, startAng, startAng + sweep * launchP, 6, g, 'rgba(255, 106, 61, 0.75)');
         } else if (running) {
-          pCtx.beginPath();
-          pCtx.arc(cx, cy, 248, startAng, endAng);
-          pCtx.strokeStyle = 'rgba(91,214,138,0.35)';
-          pCtx.lineWidth = 3;
-          pCtx.stroke();
+          drawLitArc(pCtx, cx, cy, 248, startAng, endAng, 3.2, 'rgba(91, 214, 138, 0.42)', null, 'rgba(200, 255, 220, 0.18)');
         }
 
+        // Machined step-down seat around the 194px hero socket
         pCtx.beginPath();
         pCtx.arc(cx, cy, 198, 0, Math.PI * 2);
-        pCtx.strokeStyle = running && !cur.stopping ? 'rgba(91,214,138,0.16)' : 'rgba(255,255,255,0.06)';
-        pCtx.lineWidth = 1.5;
+        pCtx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+        pCtx.lineWidth = 3.5;
+        pCtx.stroke();
+        pCtx.beginPath();
+        pCtx.arc(cx, cy, 200.5, 0, Math.PI * 2);
+        pCtx.strokeStyle = running && !cur.stopping ? 'rgba(91, 214, 138, 0.2)' : lipGrad(pCtx, cx, cy, 200, 0.02, 0.12);
+        pCtx.lineWidth = 1;
         pCtx.stroke();
       }
 
@@ -442,45 +647,42 @@ export const CircularDial: React.FC<CircularDialProps> = ({
 
         sCtx.beginPath();
         sCtx.arc(cx, cy, 280, 0, Math.PI * 2);
-        sCtx.strokeStyle = 'rgba(255,255,255,0.06)';
-        sCtx.lineWidth = 2;
-        sCtx.stroke();
-
-        sCtx.lineCap = 'round';
-        sCtx.beginPath();
-        sCtx.arc(cx, cy, rOuter, startAng, endAng);
-        sCtx.strokeStyle = '#2a2c29';
-        sCtx.lineWidth = 16;
+        sCtx.strokeStyle = lipGrad(sCtx, cx, cy, 280, 0.03, 0.09);
+        sCtx.lineWidth = 1.5;
         sCtx.stroke();
 
         sCtx.beginPath();
-        sCtx.arc(cx, cy, rInner, startAng, endAng);
-        sCtx.strokeStyle = '#242623';
-        sCtx.lineWidth = 7.5;
+        sCtx.arc(cx, cy, 274, startAng, endAng);
+        sCtx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+        sCtx.lineWidth = 1;
         sCtx.stroke();
 
+        // Milled recessed channels for download (outer) & upload (inner)
+        drawGroove(sCtx, cx, cy, rOuter, startAng, endAng, 19);
+        drawGroove(sCtx, cx, cy, rInner, startAng, endAng, 10);
+
+        // Applied polished-steel indices
         for (let i = 0; i <= 40; i++) {
           const ang = startAng + (i / 40) * sweep;
           const isMajor = i % 10 === 0;
           const isMid = i % 5 === 0 && !isMajor;
-          const r1 = isMajor ? 270 : isMid ? 268 : 266;
-          const r2 = isMajor ? 257 : isMid ? 260 : 262;
-          sCtx.beginPath();
-          sCtx.moveTo(cx + Math.cos(ang) * r1, cy + Math.sin(ang) * r1);
-          sCtx.lineTo(cx + Math.cos(ang) * r2, cy + Math.sin(ang) * r2);
-          sCtx.strokeStyle = isMajor ? '#9c9a91' : '#4a4c47';
-          sCtx.lineWidth = isMajor ? 3 : 1.5;
-          sCtx.stroke();
+          if (isMajor) drawTick(sCtx, cx, cy, ang, 272, 259, 4, '#d4d2c9', 0.55);
+          else if (isMid) drawTick(sCtx, cx, cy, ang, 272, 262, 1.9, '#73756f', 0.18);
+          else drawTick(sCtx, cx, cy, ang, 272, 266, 1.2, '#474944');
         }
 
         const labels = ['0', '100K', '1M', '10M', '100M'];
-        sCtx.font = '600 16px ui-monospace, SFMono-Regular, Menlo, monospace';
-        sCtx.fillStyle = '#7e7c74';
+        sCtx.font = '600 15px ui-monospace, SFMono-Regular, Menlo, monospace';
         sCtx.textAlign = 'center';
         sCtx.textBaseline = 'middle';
         labels.forEach((lbl, idx) => {
           const ang = startAng + (idx / 4) * sweep;
-          sCtx.fillText(lbl, cx + Math.cos(ang) * 185, cy + Math.sin(ang) * 185);
+          const lx = cx + Math.cos(ang) * 185,
+            ly = cy + Math.sin(ang) * 185;
+          sCtx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+          sCtx.fillText(lbl, lx + 0.6, ly + 1.2);
+          sCtx.fillStyle = '#93918a';
+          sCtx.fillText(lbl, lx, ly);
         });
 
         const dn = running ? bpsToNorm(smoothDownRef.current) : 0;
@@ -491,34 +693,51 @@ export const CircularDial: React.FC<CircularDialProps> = ({
           grad.addColorStop(0, '#1f8a4c');
           grad.addColorStop(0.6, '#5bd68a');
           grad.addColorStop(1, '#8ef0b2');
-          sCtx.beginPath();
-          sCtx.arc(cx, cy, rOuter, startAng, startAng + dn * sweep);
-          sCtx.strokeStyle = grad;
-          sCtx.lineWidth = 16;
-          sCtx.shadowColor = 'rgba(91,214,138,0.35)';
-          sCtx.shadowBlur = 14;
-          sCtx.stroke();
-          sCtx.shadowBlur = 0;
+          drawLitArc(
+            sCtx,
+            cx,
+            cy,
+            rOuter,
+            startAng,
+            startAng + dn * sweep,
+            14,
+            grad,
+            'rgba(91, 214, 138, 0.38)',
+            'rgba(220, 255, 232, 0.38)'
+          );
         }
 
         if (un > 0.005) {
-          sCtx.beginPath();
-          sCtx.arc(cx, cy, rInner, startAng, startAng + un * sweep);
-          sCtx.strokeStyle = '#ff6a3d';
-          sCtx.lineWidth = 7.5;
-          sCtx.shadowColor = 'rgba(255,106,61,0.35)';
-          sCtx.shadowBlur = 10;
-          sCtx.stroke();
-          sCtx.shadowBlur = 0;
+          const ugrad = sCtx.createLinearGradient(cx - rInner, cy, cx + rInner, cy);
+          ugrad.addColorStop(0, '#c9380f');
+          ugrad.addColorStop(0.6, '#ff6a3d');
+          ugrad.addColorStop(1, '#ffa27d');
+          drawLitArc(
+            sCtx,
+            cx,
+            cy,
+            rInner,
+            startAng,
+            startAng + un * sweep,
+            6.5,
+            ugrad,
+            'rgba(255, 106, 61, 0.38)',
+            'rgba(255, 225, 210, 0.4)'
+          );
         }
 
+        // Faceted tapered pointer riding over the download channel
         const tipAng = startAng + dn * sweep;
-        sCtx.beginPath();
-        sCtx.moveTo(cx + Math.cos(tipAng) * (rOuter - 14), cy + Math.sin(tipAng) * (rOuter - 14));
-        sCtx.lineTo(cx + Math.cos(tipAng) * (rOuter + 16), cy + Math.sin(tipAng) * (rOuter + 16));
-        sCtx.strokeStyle = running ? '#e84c1e' : '#555752';
-        sCtx.lineWidth = 5;
-        sCtx.stroke();
+        drawPointer(
+          sCtx,
+          cx,
+          cy,
+          tipAng,
+          rOuter - 18,
+          rOuter + 20,
+          running ? '#ef5425' : '#5e605b',
+          running ? 'rgba(232, 76, 30, 0.45)' : null
+        );
 
         // Sculpted Smoked-Glass Lower LCD Bay
         const rBay = 264;

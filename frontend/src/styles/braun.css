@@ -212,48 +212,133 @@
 .dial-bezel {
   position: relative;
   background:
+    /* Toroidal crown sheen: outer crown highlight, V-cut shadow, inner crown highlight */
+    radial-gradient(
+      closest-side circle at 50% 50%,
+      rgba(255, 255, 255, 0) calc(100% - 10px),
+      rgba(255, 255, 255, 0.30) calc(100% - 8px),
+      rgba(255, 255, 255, 0) calc(100% - 6.2px),
+      rgba(25, 25, 24, 0.10) calc(100% - 5px),
+      rgba(255, 255, 255, 0) calc(100% - 3.8px),
+      rgba(255, 255, 255, 0.38) calc(100% - 2.6px),
+      rgba(255, 255, 255, 0) calc(100% - 1.2px)
+    ),
+    /* Fine lathe-turned concentric grain */
+    repeating-radial-gradient(
+      circle at 50% 50%,
+      rgba(255, 255, 255, 0) 0px,
+      rgba(255, 255, 255, 0) 0.8px,
+      rgba(30, 28, 22, 0.05) 1.1px,
+      rgba(255, 255, 255, 0.09) 1.5px,
+      rgba(255, 255, 255, 0) 1.9px
+    ),
+    /* Anisotropic "bow-tie" specular lobes of spun metal (light from top-left) */
     conic-gradient(
-      from 215deg,
-      rgba(255, 255, 255, 0.32) 0deg,
-      rgba(255, 255, 255, 0) 65deg,
-      rgba(25, 25, 24, 0.14) 145deg,
-      rgba(255, 255, 255, 0.24) 225deg,
-      rgba(25, 25, 24, 0.1) 305deg,
-      rgba(255, 255, 255, 0.32) 360deg
+      from 0deg at 50% 50%,
+      rgba(25, 25, 24, 0.05) 0deg,
+      rgba(25, 25, 24, 0.17) 45deg,
+      rgba(25, 25, 24, 0.03) 95deg,
+      rgba(255, 255, 255, 0.40) 135deg,
+      rgba(25, 25, 24, 0.03) 175deg,
+      rgba(25, 25, 24, 0.19) 225deg,
+      rgba(25, 25, 24, 0.03) 272deg,
+      rgba(255, 255, 255, 0.66) 315deg,
+      rgba(25, 25, 24, 0.05) 360deg
     ),
     linear-gradient(142deg, #fcfbf8 0%, #e9e7df 44%, #cfcdc3 78%, #bab7ac 100%);
-  border: 1px solid #aba89c;
+  border: 1px solid #a19e92;
   box-shadow:
+    /* Tight contact shadow where the bezel seats into the socket */
+    0 0 0 1px rgba(25, 25, 24, 0.10),
+    0 1.5px 2px rgba(25, 25, 24, 0.22),
+    /* Deep ambient drop onto recessed chassis moat */
     0 14px 28px rgba(25, 25, 24, 0.24),
     4px 7px 14px rgba(25, 25, 24, 0.18),
     -3px -3px 10px rgba(255, 255, 255, 0.55),
+    /* Crisp convex upper-left catch-light & lower-right underside */
     inset 2.5px 2.5px 3px rgba(255, 255, 255, 0.95),
     inset -2.5px -3px 5px rgba(25, 25, 24, 0.28);
 }
+/* Precision V-cut lathe groove across the crown (dark near wall, lit far wall) */
 .dial-bezel::before {
   content: "";
   position: absolute;
   inset: 4.5px;
   border-radius: 9999px;
-  border: 1px solid rgba(25, 25, 24, 0.14);
-  box-shadow:
-    inset 1px 1px 1.5px rgba(25, 25, 24, 0.18),
-    1px 1px 1px rgba(255, 255, 255, 0.72);
+  padding: 1.4px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(25, 25, 24, 0.30) 0deg,
+    rgba(255, 255, 255, 0.45) 90deg,
+    rgba(255, 255, 255, 0.95) 135deg,
+    rgba(255, 255, 255, 0.45) 180deg,
+    rgba(25, 25, 24, 0.30) 270deg,
+    rgba(25, 25, 24, 0.45) 315deg,
+    rgba(25, 25, 24, 0.30) 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+/* Diamond-cut polished outer bevel: narrow mirror edge with sharp specular glints */
+.dial-bezel::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 9999px;
+  padding: 2px;
+  background: conic-gradient(
+    from 0deg,
+    rgba(255, 255, 255, 0.55) 0deg,
+    rgba(110, 106, 94, 0.55) 45deg,
+    rgba(255, 255, 255, 0.45) 105deg,
+    #ffffff 133deg,
+    #ffffff 137deg,
+    rgba(255, 255, 255, 0.40) 165deg,
+    rgba(80, 76, 66, 0.65) 225deg,
+    rgba(255, 255, 255, 0.45) 285deg,
+    #ffffff 313deg,
+    #ffffff 317deg,
+    rgba(255, 255, 255, 0.55) 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.8;
   pointer-events: none;
 }
 
 .dial-chamfer {
-  background: linear-gradient(142deg, #8b887e 0%, #b5b2a6 46%, #e2e0d7 82%, #f7f6f1 100%);
+  background:
+    conic-gradient(
+      from 0deg at 50% 50%,
+      rgba(255, 255, 255, 0.0) 0deg,
+      rgba(255, 255, 255, 0.28) 135deg,
+      rgba(255, 255, 255, 0.0) 225deg,
+      rgba(25, 25, 24, 0.18) 315deg,
+      rgba(255, 255, 255, 0.0) 360deg
+    ),
+    linear-gradient(142deg, #8b887e 0%, #b5b2a6 46%, #e2e0d7 82%, #f7f6f1 100%);
   padding: 3.5px;
   box-shadow:
     inset 2px 2.5px 4px rgba(25, 25, 24, 0.45),
     inset -1.5px -1.5px 3px rgba(255, 255, 255, 0.85),
+    /* Polished seat ring where crystal meets chamfer */
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.35),
+    0 0 0 1px rgba(25, 25, 24, 0.12),
     0 1px 1px rgba(255, 255, 255, 0.6);
 }
 
 .dial-well {
   background:
-    radial-gradient(circle at 28% 22%, rgba(255, 255, 255, 0.055) 0%, rgba(255, 255, 255, 0) 42%),
+    radial-gradient(circle at 28% 22%, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0) 42%),
+    /* Soft centre cap hides sunburst convergence */
+    radial-gradient(circle at 50% 50%, #1d1f1c 0%, rgba(29, 31, 28, 0.85) 18%, rgba(29, 31, 28, 0) 38%),
+    /* Guilloché sunburst dial texture */
+    repeating-conic-gradient(from 0deg at 50% 50%, rgba(255, 255, 255, 0.024) 0deg 0.45deg, rgba(0, 0, 0, 0) 0.45deg 1.2deg),
+    /* Faint concentric snailing */
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 3px, rgba(255, 255, 255, 0.012) 3px 4px),
     radial-gradient(circle at 50% 44%, #232522 0%, #171817 66%, #0e0f0e 100%);
   box-shadow:
     inset 5px 7px 16px rgba(0, 0, 0, 0.9),
@@ -261,6 +346,23 @@
     inset -2px -2px 6px rgba(255, 255, 255, 0.05),
     inset 0 0 0 1.5px #101110,
     0 0 0 1px rgba(0, 0, 0, 0.42);
+}
+/* Domed sapphire crystal overlay: crescent reflection + edge refraction darkening */
+.dial-well::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  pointer-events: none;
+  z-index: 40;
+  background:
+    radial-gradient(ellipse 92% 62% at 34% 6%, rgba(255, 255, 255, 0.085) 0%, rgba(255, 255, 255, 0.025) 52%, rgba(255, 255, 255, 0) 53%),
+    radial-gradient(ellipse 60% 30% at 70% 98%, rgba(255, 255, 255, 0.035) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0) 64%, rgba(0, 0, 0, 0.28) 92%, rgba(0, 0, 0, 0.45) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035),
+    inset 0 -1px 1.5px rgba(255, 255, 255, 0.07),
+    inset 0 3px 6px rgba(0, 0, 0, 0.35);
 }
 
 /* Precision Machined Ignition Switch Assembly */
@@ -275,7 +377,20 @@
   position: relative;
 }
 .ignition-bezel-ring {
-  background: conic-gradient(from 220deg, #3b3e38 0deg, #20221f 75deg, #484b45 160deg, #1a1c19 245deg, #3b3e38 360deg);
+  background:
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1px, rgba(255, 255, 255, 0.04) 1px 1.6px),
+    conic-gradient(
+      from 0deg,
+      #252723 0deg,
+      #1a1c19 45deg,
+      #2a2c28 95deg,
+      #55584f 135deg,
+      #2a2c28 175deg,
+      #181a17 225deg,
+      #2c2e2a 272deg,
+      #6a6d63 315deg,
+      #252723 360deg
+    );
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.2),
     0 2px 6px rgba(0, 0, 0, 0.65);
@@ -322,6 +437,7 @@
 
 .power-btn-core {
   background:
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1.6px, rgba(255, 240, 230, 0.045) 1.6px 2.2px),
     radial-gradient(circle at 36% 24%, rgba(255, 216, 192, 0.34) 0%, rgba(255, 106, 61, 0) 44%),
     radial-gradient(circle at 50% 42%, #ff6b3d 0%, #e84c1e 58%, #b9330c 100%);
   box-shadow:
@@ -342,12 +458,21 @@
 }
 .power-btn-core:hover {
   transform: scale(1.03);
+  background:
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1.6px, rgba(255, 240, 230, 0.05) 1.6px 2.2px),
+    radial-gradient(circle at 36% 24%, rgba(255, 228, 206, 0.44) 0%, rgba(255, 106, 61, 0) 46%),
+    radial-gradient(circle at 50% 42%, #ff794e 0%, #ef5425 58%, #c43910 100%);
+  box-shadow:
+    0 10px 24px rgba(232, 76, 30, 0.5),
+    inset 0 1.5px 2.5px rgba(255, 240, 228, 0.72),
+    inset 0 -3px 6px rgba(110, 22, 0, 0.48);
 }
 .power-btn-core:active {
   transform: scale(0.955);
 }
 .power-btn-stop {
   background:
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1.6px, rgba(255, 255, 255, 0.028) 1.6px 2.2px),
     radial-gradient(circle at 36% 24%, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0) 42%),
     radial-gradient(circle at 50% 42%, #31342f 0%, #20221f 62%, #131513 100%);
   box-shadow:
@@ -360,6 +485,7 @@
 }
 .power-btn-stop:hover {
   background:
+    repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1.6px, rgba(255, 255, 255, 0.03) 1.6px 2.2px),
     radial-gradient(circle at 36% 24%, rgba(255, 130, 92, 0.18) 0%, rgba(255, 255, 255, 0) 44%),
     radial-gradient(circle at 50% 42%, #383330 0%, #252220 62%, #171514 100%);
 }

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { api, isTauri } from './api';
 import { Titlebar } from './components/Titlebar';
 import { Sidebar } from './components/Sidebar';
@@ -79,33 +80,58 @@ export default function App() {
   const [peakDownBps, setPeakDownBps] = useState(0);
 
   const syncedOnceRef = useRef(false);
+  const pollBusyRef = useRef(false);
+  const pollQueuedRef = useRef(false);
   const animGuardRef = useRef({ launching: false, stopping: false });
   animGuardRef.current = { launching, stopping };
 
   const pollState = useCallback(async () => {
     if (!isTauri()) return;
+    if (pollBusyRef.current) {
+      pollQueuedRef.current = true;
+      return;
+    }
+    pollBusyRef.current = true;
     try {
-      const dto = await api.getState();
-      setData(dto);
-      if (dto.running && dto.telemetry.down_bps > 0) {
-        setPeakDownBps((prev) => Math.max(prev, dto.telemetry.down_bps));
-      }
-      if (!syncedOnceRef.current) {
-        setSidebarExpanded(!dto.config.sidebar_collapsed);
-        setDialPage(dto.running ? 'speed' : 'power');
-        syncedOnceRef.current = true;
-      } else if (!animGuardRef.current.launching && !animGuardRef.current.stopping && !dto.running) {
-        setDialPage('power');
-      }
+      do {
+        pollQueuedRef.current = false;
+        const dto = await api.getState();
+        setData(dto);
+        if (dto.running && dto.telemetry.down_bps > 0) {
+          setPeakDownBps((prev) => Math.max(prev, dto.telemetry.down_bps));
+        }
+        if (!syncedOnceRef.current) {
+          setSidebarExpanded(!dto.config.sidebar_collapsed);
+          setDialPage(dto.running ? 'speed' : 'power');
+          syncedOnceRef.current = true;
+        } else if (!animGuardRef.current.launching && !animGuardRef.current.stopping && !dto.running) {
+          setDialPage('power');
+        }
+      } while (pollQueuedRef.current);
     } catch (err) {
       console.error('[VP429] get_state failed:', err);
+    } finally {
+      pollBusyRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     pollState();
-    const id = setInterval(pollState, 500);
-    return () => clearInterval(id);
+    let unlisten: (() => void) | undefined;
+    if (isTauri()) {
+      listen('vp429-state-changed', () => {
+        pollState();
+      })
+        .then((fn) => {
+          unlisten = fn;
+        })
+        .catch(() => {});
+    }
+    const id = setInterval(pollState, 1000);
+    return () => {
+      clearInterval(id);
+      if (unlisten) unlisten();
+    };
   }, [pollState]);
 
   const handlePowerAction = useCallback(() => {

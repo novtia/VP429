@@ -14,7 +14,7 @@ impl MainView {
         let chain_exit_sub_name = {
             let cfg = self.engine.config.read().unwrap();
             match &cfg.chain_exit_source {
-                Some(ChainExitSource::SubscriptionNode { name }) => Some(name.clone()),
+                Some(ChainExitSource::SubscriptionNode { name, .. }) => Some(name.clone()),
                 _ => None,
             }
         };

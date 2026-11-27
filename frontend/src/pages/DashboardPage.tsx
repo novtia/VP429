@@ -225,8 +225,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
       // Dial moat rings & PCB arc rail
       setAttr('moat-glow-c', { cx: f(cx), cy: f(cy), r: f(R + 8) });
-      setAttr('moat-well-c', { cx: f(cx), cy: f(cy), r: f(R + 1) });
-      setAttr('moat-dash-c', { cx: f(cx), cy: f(cy), r: f(R - 5) });
+      setAttr('moat-well-c', { cx: f(cx), cy: f(cy), r: f(R + 1.5) });
+      setAttr('moat-lip-outer-c', { cx: f(cx), cy: f(cy), r: f(R + 1.5) });
+      setAttr('moat-lip-shadow-c', { cx: f(cx), cy: f(cy), r: f(R + 0.4) });
+      setAttr('moat-knurl-shadow-c', { cx: f(cx), cy: f(cy), r: f(R - 4.4) });
+      setAttr('moat-knurl-crest-c', { cx: f(cx), cy: f(cy), r: f(R - 4.4) });
+      setAttr('moat-knurl-outer-c', { cx: f(cx), cy: f(cy), r: f(R - 1.4) });
+      setAttr('moat-knurl-inner-c', { cx: f(cx), cy: f(cy), r: f(R - 7.4) });
       setAttr('moat-inner-c', { cx: f(cx), cy: f(cy), r: f(R - 9) });
       setAttr('pcb-arc-c', { cx: f(cx), cy: f(cy), r: f(R + 10) });
 
@@ -354,6 +359,28 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <stop offset="96%" stopColor="#e84c1e" stopOpacity="0.16" />
             <stop offset="100%" stopColor="#1f8a4c" stopOpacity="0" />
           </radialGradient>
+          {/* Directional lighting for the recessed dial socket & knurled grip ring */}
+          <linearGradient id="moatFloorGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#c4c1b5" />
+            <stop offset="50%" stopColor="#d3d1c6" />
+            <stop offset="100%" stopColor="#e2e0d7" />
+          </linearGradient>
+          <linearGradient id="moatLipOuter" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#a5a296" />
+            <stop offset="55%" stopColor="#d6d4ca" />
+            <stop offset="100%" stopColor="#ffffff" />
+          </linearGradient>
+          <linearGradient id="moatLipInner" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
+            <stop offset="50%" stopColor="#dcdad1" stopOpacity="0.6" />
+            <stop offset="100%" stopColor="#9f9c90" stopOpacity="0.7" />
+          </linearGradient>
+          <linearGradient id="knurlGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#fbfaf6" />
+            <stop offset="30%" stopColor="#e3e1d8" />
+            <stop offset="70%" stopColor="#cbc8bd" />
+            <stop offset="100%" stopColor="#eeece5" />
+          </linearGradient>
           <clipPath id="clip-panels">
             <path id="clip-tl" />
             <path id="clip-tr" />
@@ -385,9 +412,33 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           <path id="tr-bot-p" className="pcb-pulse-green pcb-pulse-slow" />
 
           <circle id="moat-glow-c" fill="url(#moatGlow)" className="dial-moat-underglow" />
-          <circle id="moat-well-c" fill="#d4d2c7" stroke="#b9b6aa" strokeWidth="1" />
-          <circle id="moat-dash-c" fill="none" stroke="#c3c0b5" strokeWidth="4" strokeDasharray="2 6" />
-          <circle id="moat-inner-c" fill="none" stroke="#b5b2a6" strokeWidth="1" />
+          {/* Socket floor: shadowed toward the light (top-left), lit on the far wall */}
+          <circle id="moat-well-c" fill="url(#moatFloorGrad)" />
+          {/* Outer socket wall lip (catches light at bottom-right) */}
+          <circle id="moat-lip-outer-c" fill="none" stroke="url(#moatLipOuter)" strokeWidth="1.2" />
+          <circle id="moat-lip-shadow-c" fill="none" stroke="rgba(25,25,24,0.10)" strokeWidth="1" />
+          {/* Fine straight-knurled grip ring: tooth shadows, then lit tooth crests */}
+          <circle
+            id="moat-knurl-shadow-c"
+            fill="none"
+            stroke="#8f8c80"
+            strokeOpacity="0.55"
+            strokeWidth="5.2"
+            strokeDasharray="1.15 1.45"
+            strokeDashoffset="-0.55"
+          />
+          <circle
+            id="moat-knurl-crest-c"
+            fill="none"
+            stroke="url(#knurlGrad)"
+            strokeWidth="5"
+            strokeDasharray="0.95 1.65"
+          />
+          {/* Knurl band chamfers */}
+          <circle id="moat-knurl-outer-c" fill="none" stroke="url(#moatLipInner)" strokeWidth="0.8" />
+          <circle id="moat-knurl-inner-c" fill="none" stroke="url(#moatLipOuter)" strokeWidth="0.8" />
+          {/* Bezel base contact shadow */}
+          <circle id="moat-inner-c" fill="none" stroke="rgba(25,25,24,0.28)" strokeWidth="1.4" />
         </g>
 
         <g className="panel-group-relief">
@@ -520,6 +571,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
                 {data.config.chain_exit_source
                   ? data.config.chain_exit_source.kind === 'subscription_node'
                     ? `落地: ${cleanNodeName(data.config.chain_exit_source.name)}`
+                    : data.config.chain_exit_source.kind === 'profile_pool'
+                    ? `落地池: ${data.config.chain_exit_source.profile_name}`
                     : '自定义落地节点'
                   : '未配置落地节点'}
               </div>
