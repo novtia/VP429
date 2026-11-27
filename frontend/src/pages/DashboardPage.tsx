@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircularDial } from '../components/CircularDial';
 import { FlagIcon } from '../components/FlagIcon';
 import {
@@ -39,7 +39,7 @@ interface DashboardPageProps {
 function buildPanelPaths(W: number, H: number) {
   const cx = W * 0.5,
     cy = H * 0.5,
-    R = H * 0.34,
+    R = H * 0.366, // card cut-out radius: leaves a clear chassis margin around the dial socket
     r = 16,
     f = 16;
   const xTopL = cx + 46,
@@ -150,6 +150,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 }) => {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const [probeDone, setProbeDone] = useState(false);
+  const prevCheckingRef = useRef(false);
+
+  useEffect(() => {
+    if (prevCheckingRef.current && !data.telemetry.checking_ip) {
+      setProbeDone(true);
+      const t = setTimeout(() => setProbeDone(false), 1100);
+      prevCheckingRef.current = false;
+      return () => clearTimeout(t);
+    }
+    prevCheckingRef.current = data.telemetry.checking_ip;
+  }, [data.telemetry.checking_ip]);
 
   // Synchronous pre-paint 1:1 pixel SVG geometry + pin-to-dial 45° PCB trace router (zero frame lag / zero flicker)
   useLayoutEffect(() => {
@@ -191,11 +203,23 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       stage.style.setProperty('--wing-br-l', `${Math.round(xBotR)}px`);
       stage.style.setProperty('--wing-br-w', `${Math.max(110, Math.round(W - sideW - xBotR))}px`);
 
-      // Panels & clip paths
+      // Panels, jigsaw sockets, raised card side walls & clip paths
       setAttr('panel-tl', { d: p.tl });
       setAttr('panel-tr', { d: p.tr });
       setAttr('panel-bl', { d: p.bl });
       setAttr('panel-br', { d: p.br });
+      setAttr('sock-tl', { d: p.tl });
+      setAttr('sock-tr', { d: p.tr });
+      setAttr('sock-bl', { d: p.bl });
+      setAttr('sock-br', { d: p.br });
+      setAttr('sock-rim-tl', { d: p.tl });
+      setAttr('sock-rim-tr', { d: p.tr });
+      setAttr('sock-rim-bl', { d: p.bl });
+      setAttr('sock-rim-br', { d: p.br });
+      setAttr('wall-tl', { d: p.tl });
+      setAttr('wall-tr', { d: p.tr });
+      setAttr('wall-bl', { d: p.bl });
+      setAttr('wall-br', { d: p.br });
       setAttr('clip-tl', { d: p.tl });
       setAttr('clip-tr', { d: p.tr });
       setAttr('clip-bl', { d: p.bl });
@@ -223,16 +247,14 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
       setAttr('tr-bot-r2', { x1: f(xBotMid + 2), y1: f(cy + R - 4), x2: f(xBotMid + 2), y2: f(H - 4) });
       setAttr('tr-bot-p', { d: `M ${f(xBotMid)} ${f(H - 4)} L ${f(xBotMid)} ${f(cy + R - 4)}` });
 
-      // Dial moat rings & PCB arc rail
-      setAttr('moat-glow-c', { cx: f(cx), cy: f(cy), r: f(R + 8) });
-      setAttr('moat-well-c', { cx: f(cx), cy: f(cy), r: f(R + 1.5) });
-      setAttr('moat-lip-outer-c', { cx: f(cx), cy: f(cy), r: f(R + 1.5) });
-      setAttr('moat-lip-shadow-c', { cx: f(cx), cy: f(cy), r: f(R + 0.4) });
-      setAttr('moat-knurl-shadow-c', { cx: f(cx), cy: f(cy), r: f(R - 4.4) });
-      setAttr('moat-knurl-crest-c', { cx: f(cx), cy: f(cy), r: f(R - 4.4) });
-      setAttr('moat-knurl-outer-c', { cx: f(cx), cy: f(cy), r: f(R - 1.4) });
-      setAttr('moat-knurl-inner-c', { cx: f(cx), cy: f(cy), r: f(R - 7.4) });
-      setAttr('moat-inner-c', { cx: f(cx), cy: f(cy), r: f(R - 9) });
+      // Smooth ceramic dial socket moat (sized to the dial bezel, leaving a clean chassis margin to R)
+      const rMoat = H * 0.34;
+      setAttr('moat-glow-c', { cx: f(cx), cy: f(cy), r: f(rMoat + 8) });
+      setAttr('moat-well-c', { cx: f(cx), cy: f(cy), r: f(rMoat + 1.5) });
+      setAttr('moat-lip-outer-c', { cx: f(cx), cy: f(cy), r: f(rMoat + 1.5) });
+      setAttr('moat-lip-shadow-c', { cx: f(cx), cy: f(cy), r: f(rMoat + 0.4) });
+      setAttr('moat-ao-c', { cx: f(cx), cy: f(cy), r: f(rMoat + 1.2) });
+      setAttr('moat-inner-c', { cx: f(cx), cy: f(cy), r: f(rMoat - 12.8) });
       setAttr('pcb-arc-c', { cx: f(cx), cy: f(cy), r: f(R + 10) });
 
       // BL serpentine bus & BR gold-finger pads
@@ -359,7 +381,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <stop offset="96%" stopColor="#e84c1e" stopOpacity="0.16" />
             <stop offset="100%" stopColor="#1f8a4c" stopOpacity="0" />
           </radialGradient>
-          {/* Directional lighting for the recessed dial socket & knurled grip ring */}
+          {/* Smooth ceramic dial socket lighting & continuous ambient occlusion */}
           <linearGradient id="moatFloorGrad" x1="0%" y1="0%" x2="100%" y2="100%">
             <stop offset="0%" stopColor="#c4c1b5" />
             <stop offset="50%" stopColor="#d3d1c6" />
@@ -370,16 +392,44 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <stop offset="55%" stopColor="#d6d4ca" />
             <stop offset="100%" stopColor="#ffffff" />
           </linearGradient>
-          <linearGradient id="moatLipInner" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.9" />
-            <stop offset="50%" stopColor="#dcdad1" stopOpacity="0.6" />
-            <stop offset="100%" stopColor="#9f9c90" stopOpacity="0.7" />
+          <radialGradient id="moatAOGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="91%" stopColor="#1e1c16" stopOpacity="0.34" />
+            <stop offset="94%" stopColor="#23201a" stopOpacity="0.16" />
+            <stop offset="98%" stopColor="#23201a" stopOpacity="0.04" />
+            <stop offset="100%" stopColor="#23201a" stopOpacity="0" />
+          </radialGradient>
+          {/* Jigsaw socket cavity: same-shape recess milled into the chassis */}
+          <linearGradient id="socketFloorGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#cfccc1" />
+            <stop offset="55%" stopColor="#d8d6cc" />
+            <stop offset="100%" stopColor="#e0ded5" />
           </linearGradient>
-          <linearGradient id="knurlGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#fbfaf6" />
-            <stop offset="30%" stopColor="#e3e1d8" />
-            <stop offset="70%" stopColor="#cbc8bd" />
-            <stop offset="100%" stopColor="#eeece5" />
+          <filter id="socketInset" x="-4%" y="-4%" width="108%" height="108%" colorInterpolationFilters="sRGB">
+            <feGaussianBlur in="SourceAlpha" stdDeviation="2.8" result="b1" />
+            <feOffset in="b1" dx="2.6" dy="3.4" result="o1" />
+            <feComposite in="SourceAlpha" in2="o1" operator="out" result="e1" />
+            <feFlood floodColor="#35322a" floodOpacity="0.42" />
+            <feComposite in2="e1" operator="in" result="sh" />
+            <feGaussianBlur in="SourceAlpha" stdDeviation="0.9" result="b0" />
+            <feOffset in="b0" dx="0.9" dy="1.2" result="o0" />
+            <feComposite in="SourceAlpha" in2="o0" operator="out" result="e0" />
+            <feFlood floodColor="#26241e" floodOpacity="0.35" />
+            <feComposite in2="e0" operator="in" result="edge" />
+            <feGaussianBlur in="SourceAlpha" stdDeviation="1.4" result="b2" />
+            <feOffset in="b2" dx="-1.6" dy="-2" result="o2" />
+            <feComposite in="SourceAlpha" in2="o2" operator="out" result="e2" />
+            <feFlood floodColor="#ffffff" floodOpacity="0.8" />
+            <feComposite in2="e2" operator="in" result="hl" />
+            <feMerge>
+              <feMergeNode in="SourceGraphic" />
+              <feMergeNode in="sh" />
+              <feMergeNode in="edge" />
+              <feMergeNode in="hl" />
+            </feMerge>
+          </filter>
+          <linearGradient id="cardWallGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#d6d3c8" />
+            <stop offset="100%" stopColor="#b3b0a4" />
           </linearGradient>
           <clipPath id="clip-panels">
             <path id="clip-tl" />
@@ -389,7 +439,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           </clipPath>
         </defs>
 
-        {/* Inter-Card Bus Trenches & Dial Socket Moat (1:1 pixel aligned) */}
+        {/* Jigsaw Sockets: same-shape cavities milled into the chassis */}
+        <g>
+          <path id="sock-rim-tl" className="socket-rim" />
+          <path id="sock-rim-tr" className="socket-rim" />
+          <path id="sock-rim-bl" className="socket-rim" />
+          <path id="sock-rim-br" className="socket-rim" />
+          <path id="sock-tl" className="socket-cavity" />
+          <path id="sock-tr" className="socket-cavity" />
+          <path id="sock-bl" className="socket-cavity" />
+          <path id="sock-br" className="socket-cavity" />
+        </g>
+
+        {/* Inter-Card Bus Trenches & Smooth Ceramic Dial Socket Moat (1:1 pixel aligned) */}
         <g>
           <line id="tr-top-g" className="trench-groove" />
           <line id="tr-top-r1" className="trench-rail" />
@@ -412,33 +474,19 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
           <path id="tr-bot-p" className="pcb-pulse-green pcb-pulse-slow" />
 
           <circle id="moat-glow-c" fill="url(#moatGlow)" className="dial-moat-underglow" />
-          {/* Socket floor: shadowed toward the light (top-left), lit on the far wall */}
           <circle id="moat-well-c" fill="url(#moatFloorGrad)" />
-          {/* Outer socket wall lip (catches light at bottom-right) */}
           <circle id="moat-lip-outer-c" fill="none" stroke="url(#moatLipOuter)" strokeWidth="1.2" />
           <circle id="moat-lip-shadow-c" fill="none" stroke="rgba(25,25,24,0.10)" strokeWidth="1" />
-          {/* Fine straight-knurled grip ring: tooth shadows, then lit tooth crests */}
-          <circle
-            id="moat-knurl-shadow-c"
-            fill="none"
-            stroke="#8f8c80"
-            strokeOpacity="0.55"
-            strokeWidth="5.2"
-            strokeDasharray="1.15 1.45"
-            strokeDashoffset="-0.55"
-          />
-          <circle
-            id="moat-knurl-crest-c"
-            fill="none"
-            stroke="url(#knurlGrad)"
-            strokeWidth="5"
-            strokeDasharray="0.95 1.65"
-          />
-          {/* Knurl band chamfers */}
-          <circle id="moat-knurl-outer-c" fill="none" stroke="url(#moatLipInner)" strokeWidth="0.8" />
-          <circle id="moat-knurl-inner-c" fill="none" stroke="url(#moatLipOuter)" strokeWidth="0.8" />
-          {/* Bezel base contact shadow */}
-          <circle id="moat-inner-c" fill="none" stroke="rgba(25,25,24,0.28)" strokeWidth="1.4" />
+          <circle id="moat-ao-c" fill="url(#moatAOGrad)" />
+          <circle id="moat-inner-c" fill="none" stroke="rgba(30,28,22,0.34)" strokeWidth="1.8" />
+        </g>
+
+        {/* Raised card side walls (physical piece thickness) */}
+        <g>
+          <path id="wall-tl" className="card-wall" />
+          <path id="wall-tr" className="card-wall" />
+          <path id="wall-bl" className="card-wall" />
+          <path id="wall-br" className="card-wall" />
         </g>
 
         <g className="panel-group-relief">
@@ -765,16 +813,46 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
             <FlagIcon code={exitCountry.code} size="sm" />
             <span className="text-[11px] font-semibold tracking-wider uppercase text-[#78766e]">出口检测</span>
           </div>
-          <span className="hw-micro-btn px-2 py-0.5 rounded text-[10.5px] font-semibold text-[#54524c]">
-            {data.telemetry.checking_ip ? '...' : '刷新'}
-          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCheckExitIp();
+            }}
+            className={`hw-micro-btn px-2 py-0.5 rounded text-[10.5px] font-semibold text-[#54524c] flex items-center gap-1 cursor-pointer ${
+              data.telemetry.checking_ip ? 'is-probing' : probeDone ? 'is-probe-done' : ''
+            }`}
+          >
+            <svg
+              className="hw-spin-ico w-2.5 h-2.5 shrink-0"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <polyline points="21 3 21 9 15 9" />
+            </svg>
+            <span>{data.telemetry.checking_ip ? '探测中' : probeDone ? '已更新' : '刷新'}</span>
+          </button>
         </div>
 
-        <div className="hw-readout-bay relative px-2.5 py-2 rounded-md my-1">
-          <span id="pin-egress-1" className="hw-pin pin-green absolute -left-[3.5px] top-[34%]" />
+        <div
+          className={`hw-readout-bay relative px-2.5 py-2 rounded-md my-1 ${
+            data.telemetry.checking_ip ? 'is-probing' : probeDone ? 'is-probe-done' : ''
+          }`}
+        >
+          <span
+            id="pin-egress-1"
+            className={`hw-pin pin-green absolute -left-[3.5px] top-[34%] ${
+              data.telemetry.checking_ip ? 'pin-flash' : probeDone ? 'pin-flash-green' : ''
+            }`}
+          />
           <span id="pin-egress-2" className="hw-pin absolute -left-[3.5px] top-[68%]" />
           <div className="text-[15.5px] font-mono font-bold tracking-tight text-[#191918] tabular-nums leading-snug truncate">
-            {data.telemetry.checking_ip ? '检测中...' : data.telemetry.exit_ip || '点击探测出口 IP'}
+            {data.telemetry.checking_ip ? 'PROBING...' : data.telemetry.exit_ip || '点击探测出口 IP'}
           </div>
           <div className="text-[11px] font-mono text-[#626058] mt-0.5 truncate">
             {data.telemetry.exit_country_code || exitCountry.code} · {data.telemetry.local_ip}
@@ -783,8 +861,16 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
         <div className="pt-1.5 border-t border-[#e0ded6] flex items-center justify-between text-[11px]">
           <span className="text-[#78766e]">点击重新探测</span>
-          <span className={data.running ? 'text-[#1f8a4c] font-medium' : 'text-[#78766e] font-medium'}>
-            {data.running ? '● 连通' : '○ 待机'}
+          <span
+            className={
+              data.telemetry.checking_ip
+                ? 'text-[#e84c1e] font-medium'
+                : data.running || probeDone
+                ? 'text-[#1f8a4c] font-medium'
+                : 'text-[#78766e] font-medium'
+            }
+          >
+            {data.telemetry.checking_ip ? '◌ 探测中' : data.running ? '● 连通' : probeDone ? '● 已核验' : '○ 待机'}
           </span>
         </div>
       </div>

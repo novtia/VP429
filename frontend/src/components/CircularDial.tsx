@@ -26,7 +26,7 @@ interface CircularDialProps {
   onStopShowPower: () => void;
 }
 
-const LAUNCH_DUR = 1650;
+const LAUNCH_DUR = 1550;
 const STOP_DUR = 920;
 
 // ---- Shared precision-instrument rendering helpers (light source: top-left) ----
@@ -263,17 +263,27 @@ export const CircularDial: React.FC<CircularDialProps> = ({
   const pickerLayerRef = useRef<HTMLDivElement | null>(null);
   const pickerListRef = useRef<HTMLDivElement | null>(null);
   const powerPageRef = useRef<HTMLDivElement | null>(null);
+  const speedPageRef = useRef<HTMLDivElement | null>(null);
 
   const smoothDownRef = useRef(0);
   const smoothUpRef = useRef(0);
   const streaksRef = useRef(
-    Array.from({ length: 68 }, (_, i) => ({
-      angle: (i / 68) * Math.PI * 2 + (Math.random() - 0.5) * 0.25,
-      z: 0.12 + Math.random() * 0.88,
-      speedMult: 0.75 + Math.random() * 0.7,
-      thickness: 1.4 + Math.random() * 2.2,
-      color: i % 5 === 0 ? '#ff6a3d' : i % 3 === 0 ? '#5bd68a' : '#e8e6de',
-    }))
+    Array.from({ length: 84 }, (_, i) => {
+      const h1 = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+      const h2 = Math.sin(i * 269.5 + 183.3) * 43758.5453;
+      const h3 = Math.sin(i * 419.2 + 71.9) * 43758.5453;
+      const r1 = h1 - Math.floor(h1);
+      const r2 = h2 - Math.floor(h2);
+      const r3 = h3 - Math.floor(h3);
+      return {
+        angle: (i / 84) * Math.PI * 2 + (r1 - 0.5) * 0.14,
+        z0: r2,
+        z: 0.12 + r2 * 0.88,
+        speedMult: 0.78 + r3 * 0.56,
+        thickness: 1.1 + r1 * 1.75,
+        color: i % 4 === 0 ? '#ff6a3d' : i % 3 === 0 ? '#5bd68a' : '#e8e4d8',
+      };
+    })
   );
 
   // Latest props ref for 60fps canvas loop
@@ -465,65 +475,209 @@ export const CircularDial: React.FC<CircularDialProps> = ({
           }
           if (p >= 1) cur.onStopComplete();
         } else if (cur.launching) {
-          const p = Math.min(1, (now - cur.launchStartMs) / LAUNCH_DUR);
-          const accel = Math.pow(p, 2.3);
-          const dzBase = 0.01 + accel * 0.072;
-          const masterAlpha = p < 0.12 ? p / 0.12 : p < 0.64 ? 1 : Math.max(0, 1 - (p - 0.64) / 0.36);
+          const p = Math.max(0, Math.min(1, (now - cur.launchStartMs) / LAUNCH_DUR));
+          const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+          const easeInCubic = (t: number) => t * t * t;
 
-          if (powerPageRef.current && p < 0.64 && cur.dialPage === 'power') {
-            const shrink = 1 - Math.pow(p / 0.64, 1.8) * 0.28;
-            const fadeBtn = Math.max(0, 1 - Math.pow(p / 0.6, 2.0));
-            powerPageRef.current.style.transform = `scale(${shrink.toFixed(3)})`;
-            powerPageRef.current.style.opacity = fadeBtn.toFixed(3);
-          }
-          if (p >= 0.62 && cur.dialPage !== 'speed') {
-            if (powerPageRef.current) {
-              powerPageRef.current.style.transform = '';
-              powerPageRef.current.style.opacity = '';
+          const pPower = powerPageRef.current;
+          const pSpeed = speedPageRef.current;
+
+          // Phase 1 & 2: Tactile button detent (0..0.16) -> perspective dive (0.16..0.55)
+          if (p < 0.56 && cur.dialPage === 'power' && pPower) {
+            let sc = 1,
+              op = 1;
+            if (p < 0.09) {
+              sc = 1 - 0.055 * easeOutCubic(p / 0.09);
+            } else if (p < 0.16) {
+              sc = 0.945 + 0.012 * ((p - 0.09) / 0.07);
+            } else {
+              const dive = Math.min(1, (p - 0.16) / 0.39);
+              sc = 0.957 - 0.36 * easeInCubic(dive);
+              op = Math.max(0, 1 - Math.pow(dive, 1.75));
             }
-            cur.onLaunchShowSpeed();
+            pPower.style.transition = 'none';
+            pPower.style.transform = `scale(${sc.toFixed(4)})`;
+            pPower.style.opacity = op.toFixed(4);
           }
 
-          if (masterAlpha > 0.005) {
-            wCtx.save();
-            wCtx.lineCap = 'round';
-            const fov = 72;
-            streaksRef.current.forEach((s) => {
-              const prevZ = s.z;
-              s.z -= dzBase * s.speedMult;
-              if (s.z <= 0.04) {
-                s.z = 0.88 + Math.random() * 0.14;
-                s.angle += (Math.random() - 0.5) * 0.35;
-                return;
+          // Phase 3: Synchronized swap to Speedometer behind breakthrough ring (p >= 0.56)
+          if (p >= 0.56) {
+            if (pPower) {
+              pPower.style.transition = 'none';
+              pPower.style.opacity = '0';
+              pPower.style.transform = 'scale(0.6)';
+            }
+            if (cur.dialPage !== 'speed') {
+              cur.onLaunchShowSpeed();
+            }
+            if (pSpeed) {
+              const em = Math.min(1, (p - 0.56) / 0.14);
+              const emEase = easeOutCubic(em);
+              pSpeed.style.transition = 'none';
+              pSpeed.style.transform = `scale(${(0.92 + 0.08 * emEase).toFixed(4)})`;
+              pSpeed.style.opacity = (0.18 + 0.82 * emEase).toFixed(4);
+            }
+          }
+
+          const tunnelAlpha =
+            p < 0.1
+              ? easeOutCubic(p / 0.1) * 0.55
+              : p < 0.58
+              ? 0.55 + 0.45 * ((p - 0.1) / 0.48)
+              : Math.max(0, 1 - Math.pow((p - 0.58) / 0.34, 1.35));
+
+          wCtx.save();
+
+          // 1. Phase 1 Ignition Detent Impulse Ring (p: 0.03 -> 0.28)
+          if (p >= 0.03 && p <= 0.28) {
+            const ip = (p - 0.03) / 0.25;
+            const rImp = 194 + easeOutCubic(ip) * 90;
+            const aImp = Math.sin(ip * Math.PI) * 0.72;
+            wCtx.beginPath();
+            wCtx.arc(cx, cy, rImp, 0, Math.PI * 2);
+            wCtx.strokeStyle = `rgba(255, 138, 92, ${aImp.toFixed(3)})`;
+            wCtx.lineWidth = 3.2 * (1 - ip * 0.55);
+            wCtx.shadowColor = 'rgba(255, 106, 61, 0.85)';
+            wCtx.shadowBlur = 14;
+            wCtx.stroke();
+            wCtx.shadowBlur = 0;
+          }
+
+          // 2. Optical Core Bloom + 3D Perspective Tunnel Ribs + Radial Light Rails
+          if (tunnelAlpha > 0.005) {
+            const greenMix = Math.max(0, Math.min(1, (p - 0.34) / 0.24));
+            const peakBloom =
+              p < 0.58
+                ? 0.14 + 0.24 * Math.pow(p / 0.58, 2)
+                : 0.38 * Math.max(0, 1 - (p - 0.58) / 0.22);
+            const rBloom = 155 + 55 * greenMix;
+            const glow = wCtx.createRadialGradient(cx, cy, 4, cx, cy, rBloom);
+            if (greenMix > 0.02) {
+              glow.addColorStop(0, `rgba(190, 255, 218, ${(peakBloom * 0.65 * greenMix).toFixed(3)})`);
+              glow.addColorStop(
+                0.32,
+                `rgba(91, 214, 138, ${(peakBloom * 0.72 * greenMix + peakBloom * 0.25 * (1 - greenMix)).toFixed(3)})`
+              );
+              glow.addColorStop(0.68, `rgba(232, 76, 30, ${(peakBloom * 0.28 * (1 - greenMix * 0.6)).toFixed(3)})`);
+              glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            } else {
+              glow.addColorStop(0, `rgba(255, 148, 98, ${(peakBloom * 0.65).toFixed(3)})`);
+              glow.addColorStop(0.52, `rgba(232, 76, 30, ${(peakBloom * 0.32).toFixed(3)})`);
+              glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            }
+            wCtx.fillStyle = glow;
+            wCtx.fillRect(0, 0, w, h);
+
+            const travel = p * 1.15 + Math.pow(p, 2.35) * 4.4;
+            const fovRing = 42;
+            const ringCount = 7;
+            const btnMaskR =
+              p < 0.22
+                ? 182
+                : p < 0.44
+                ? 182 - easeOutCubic((p - 0.22) / 0.22) * 150
+                : p > 0.56
+                ? 185 + easeOutCubic(Math.min(1, (p - 0.56) / 0.18)) * 95
+                : 32;
+
+            for (let i = 0; i < ringCount; i++) {
+              const z = 1.0 - ((travel * 0.72 + i / ringCount) % 1.0);
+              if (z < 0.13 || z > 0.96) continue;
+              const rr = fovRing / z;
+              if (rr < Math.max(28, btnMaskR) || rr > 294) continue;
+              const depthFade = Math.min(1, (rr - 28) / 75) * Math.min(1, (294 - rr) / 48);
+              const aRing = tunnelAlpha * depthFade * 0.36;
+              if (aRing < 0.008) continue;
+
+              const isNear = rr > 155;
+              wCtx.beginPath();
+              wCtx.arc(cx, cy, rr, 0, Math.PI * 2);
+              wCtx.strokeStyle = isNear
+                ? `rgba(91, 214, 138, ${(aRing * (0.45 + 0.55 * greenMix)).toFixed(3)})`
+                : `rgba(255, 130, 86, ${(aRing * 0.88).toFixed(3)})`;
+              wCtx.lineWidth = 0.85 + (rr / 290) * 1.65;
+              wCtx.stroke();
+
+              const tickLen = 4 + (rr / 290) * 6;
+              wCtx.beginPath();
+              for (let q = 0; q < 4; q++) {
+                const qa = q * (Math.PI / 2);
+                const qc = Math.cos(qa),
+                  qs = Math.sin(qa);
+                wCtx.moveTo(cx + qc * (rr - tickLen * 0.5), cy + qs * (rr - tickLen * 0.5));
+                wCtx.lineTo(cx + qc * (rr + tickLen * 0.5), cy + qs * (rr + tickLen * 0.5));
               }
-              const tailZ = Math.min(1.05, prevZ + dzBase * (2.2 + accel * 4.5));
-              const rHead = Math.min(315, fov / s.z);
-              const rTail = Math.min(310, fov / tailZ);
-              if (rHead < 26) return;
+              wCtx.strokeStyle = `rgba(242, 241, 236, ${(aRing * 0.65).toFixed(3)})`;
+              wCtx.lineWidth = 1.1;
+              wCtx.stroke();
+            }
+
+            wCtx.lineCap = 'round';
+            const fov = 56;
+            const vel = 0.045 + Math.pow(p, 2.15) * 0.22;
+            const innerClear = btnMaskR;
+
+            streaksRef.current.forEach((s) => {
+              const z = 1.0 - ((travel * s.speedMult + s.z0) % 1.0);
+              if (z <= 0.14 || z >= 0.98) return;
+              const tailZ = Math.min(1.02, z + vel * s.speedMult * (1.05 + 0.55 * (1 - z)));
+              const rHead = Math.min(302, fov / z);
+              const rTail = Math.max(innerClear, Math.min(296, fov / tailZ));
+              if (rHead < innerClear + 4 || rHead <= rTail + 3) return;
               const cos = Math.cos(s.angle),
                 sin = Math.sin(s.angle);
               const x0 = cx + cos * rTail,
                 y0 = cy + sin * rTail;
               const x1 = cx + cos * rHead,
                 y1 = cy + sin * rHead;
-              const depthFade = Math.min(1, Math.max(0, (rHead - 26) / 110));
+              const depthFade = Math.min(1, Math.max(0, (rHead - innerClear) / 72));
               const grad = wCtx.createLinearGradient(x0, y0, x1, y1);
               grad.addColorStop(0, 'rgba(255,255,255,0)');
-              grad.addColorStop(1, s.color);
-              wCtx.globalAlpha = masterAlpha * depthFade;
+              grad.addColorStop(0.75, s.color);
+              grad.addColorStop(1, 'rgba(255, 252, 245, 0.95)');
+              wCtx.globalAlpha = tunnelAlpha * depthFade * 0.84;
               wCtx.beginPath();
               wCtx.moveTo(x0, y0);
               wCtx.lineTo(x1, y1);
               wCtx.strokeStyle = grad;
-              wCtx.lineWidth = s.thickness * (0.45 + depthFade * 1.15);
+              wCtx.lineWidth = s.thickness * (0.45 + depthFade * 0.9);
               wCtx.stroke();
             });
-            wCtx.restore();
+            wCtx.globalAlpha = 1;
           }
+
+          // 3. Phase 3 Breakthrough Shockwave Ring (p: 0.53 -> 0.75)
+          if (p >= 0.53 && p <= 0.75) {
+            const bp = (p - 0.53) / 0.22;
+            const rWave = 36 + easeOutCubic(bp) * 252;
+            const aWave = Math.sin(bp * Math.PI) * 0.85;
+            wCtx.beginPath();
+            wCtx.arc(cx, cy, rWave, 0, Math.PI * 2);
+            wCtx.strokeStyle = `rgba(91, 214, 138, ${(aWave * 0.45).toFixed(3)})`;
+            wCtx.lineWidth = 11 * (1 - bp * 0.55);
+            wCtx.stroke();
+            wCtx.beginPath();
+            wCtx.arc(cx, cy, rWave, 0, Math.PI * 2);
+            wCtx.strokeStyle = `rgba(225, 255, 238, ${aWave.toFixed(3)})`;
+            wCtx.lineWidth = 2.6 * (1 - bp * 0.45);
+            wCtx.shadowColor = 'rgba(91, 214, 138, 0.9)';
+            wCtx.shadowBlur = 16;
+            wCtx.stroke();
+            wCtx.shadowBlur = 0;
+          }
+
+          wCtx.restore();
+
           if (p >= 1) {
-            if (powerPageRef.current) {
-              powerPageRef.current.style.transform = '';
-              powerPageRef.current.style.opacity = '';
+            if (pPower) {
+              pPower.style.transition = '';
+              pPower.style.transform = '';
+              pPower.style.opacity = '';
+            }
+            if (pSpeed) {
+              pSpeed.style.transition = '';
+              pSpeed.style.transform = '';
+              pSpeed.style.opacity = '';
             }
             cur.onLaunchComplete();
           }
@@ -541,7 +695,7 @@ export const CircularDial: React.FC<CircularDialProps> = ({
         pCtx.clearRect(0, 0, w, h);
 
         const t = now * 0.001;
-        const launchP = cur.launching ? Math.min(1, (now - cur.launchStartMs) / (LAUNCH_DUR * 0.62)) : 0;
+        const launchP = cur.launching ? Math.min(1, Math.max(0, (now - cur.launchStartMs) / (LAUNCH_DUR * 0.54))) : 0;
         const stopP = cur.stopping ? Math.min(1, (now - cur.stopStartMs) / STOP_DUR) : 0;
 
         const bgGlow = pCtx.createRadialGradient(cx, cy, 120, cx, cy, 248);
@@ -607,11 +761,21 @@ export const CircularDial: React.FC<CircularDialProps> = ({
             );
           }
         } else if (cur.launching && launchP > 0.01) {
+          const easedCharge = launchP < 0.5 ? 2 * launchP * launchP : 1 - Math.pow(-2 * launchP + 2, 2) / 2;
           const g = pCtx.createLinearGradient(cx - 248, cy, cx + 248, cy);
           g.addColorStop(0, '#c9380f');
           g.addColorStop(0.55, '#ff6a3d');
-          g.addColorStop(1, '#ffa27d');
-          drawLitArc(pCtx, cx, cy, 248, startAng, startAng + sweep * launchP, 6, g, 'rgba(255, 106, 61, 0.75)');
+          g.addColorStop(1, '#ffd0b3');
+          const headAng = startAng + sweep * easedCharge;
+          drawLitArc(pCtx, cx, cy, 248, startAng, headAng, 6, g, 'rgba(255, 106, 61, 0.85)');
+          pCtx.save();
+          pCtx.beginPath();
+          pCtx.arc(cx + Math.cos(headAng) * 248, cy + Math.sin(headAng) * 248, 3.8, 0, Math.PI * 2);
+          pCtx.fillStyle = '#fff5ee';
+          pCtx.shadowColor = 'rgba(255, 130, 80, 0.95)';
+          pCtx.shadowBlur = 12;
+          pCtx.fill();
+          pCtx.restore();
         } else if (running) {
           drawLitArc(pCtx, cx, cy, 248, startAng, endAng, 3.2, 'rgba(91, 214, 138, 0.42)', null, 'rgba(200, 255, 220, 0.18)');
         }
@@ -685,8 +849,29 @@ export const CircularDial: React.FC<CircularDialProps> = ({
           sCtx.fillText(lbl, lx, ly);
         });
 
-        const dn = running ? bpsToNorm(smoothDownRef.current) : 0;
-        const un = running ? bpsToNorm(smoothUpRef.current) : 0;
+        const liveDn = running ? bpsToNorm(smoothDownRef.current) : 0;
+        const liveUn = running ? bpsToNorm(smoothUpRef.current) : 0;
+
+        // Phase 4 Sports-Car Instrument Self-Test Sweep (p: 0.56 -> 1.00)
+        let dn = liveDn;
+        let un = liveUn;
+        let sweepPhase = -1;
+        if (cur.launching) {
+          const lp = Math.max(0, Math.min(1, (now - cur.launchStartMs) / LAUNCH_DUR));
+          if (lp >= 0.56) {
+            sweepPhase = (lp - 0.56) / 0.44;
+            if (sweepPhase < 0.44) {
+              const k = 1 - Math.pow(1 - sweepPhase / 0.44, 3);
+              dn = 0.94 * k;
+              un = 0.78 * k;
+            } else {
+              const t = (sweepPhase - 0.44) / 0.56;
+              const k = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+              dn = 0.94 + (liveDn - 0.94) * k;
+              un = 0.78 + (liveUn - 0.78) * k;
+            }
+          }
+        }
 
         if (dn > 0.005) {
           const grad = sCtx.createLinearGradient(cx - rOuter, cy, cx + rOuter, cy);
@@ -831,15 +1016,31 @@ export const CircularDial: React.FC<CircularDialProps> = ({
           const ang = barStartAng + frac * (barEndAng - barStartAng);
           const tot = running ? u + d : 0;
           const norm = Math.min(1, tot / (maxVal * 1.1));
-          const activeBar = running && tot >= 1;
-          const len = activeBar ? minBarLen + norm * (maxBarLen - minBarLen) : minBarLen;
+          let bootWave = 0;
+          if (sweepPhase >= 0.04 && sweepPhase <= 0.88) {
+            const waveCenter = (sweepPhase - 0.04) / 0.74;
+            const dist = Math.abs(frac - waveCenter);
+            if (dist < 0.24) bootWave = Math.cos((dist / 0.24) * (Math.PI / 2));
+          }
+          const effectiveNorm = Math.max(norm, bootWave * 0.88);
+          const isBootLit = bootWave > 0.08 && (!running || tot < 1 || bootWave * 0.88 > norm);
+          const activeBar = (running && tot >= 1) || isBootLit;
+          const len = activeBar ? minBarLen + effectiveNorm * (maxBarLen - minBarLen) : minBarLen;
           const rIn = rBase - len;
           const cos = Math.cos(ang),
             sin = Math.sin(ang);
           sCtx.beginPath();
           sCtx.moveTo(cx + cos * rBase, cy + sin * rBase);
           sCtx.lineTo(cx + cos * rIn, cy + sin * rIn);
-          sCtx.strokeStyle = !activeBar ? '#363b36' : u > d ? '#ff6a3d' : '#5bd68a';
+          sCtx.strokeStyle = isBootLit
+            ? bootWave > 0.65
+              ? '#8ef0b2'
+              : '#5bd68a'
+            : !activeBar
+            ? '#363b36'
+            : u > d
+            ? '#ff6a3d'
+            : '#5bd68a';
           sCtx.lineWidth = activeBar ? 7 : 6.5;
           sCtx.stroke();
         });
@@ -887,7 +1088,7 @@ export const CircularDial: React.FC<CircularDialProps> = ({
       className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 aspect-square flex items-center justify-center z-10"
       style={{ height: '62.5%' }}
     >
-      <div className="w-full h-full rounded-full dial-bezel p-[10px] flex items-center justify-center">
+      <div className="w-full h-full rounded-full dial-bezel p-[13px] flex items-center justify-center">
         <div className="w-full h-full rounded-full dial-chamfer flex items-center justify-center">
           <div className="dial-well relative w-full h-full rounded-full overflow-hidden flex items-center justify-center">
             <canvas
@@ -992,6 +1193,7 @@ export const CircularDial: React.FC<CircularDialProps> = ({
 
               {/* PAGE 1: LIVE SPEEDOMETER PAGE */}
               <div
+                ref={speedPageRef}
                 className={`dial-page absolute inset-0 z-10 ${
                   dialPage === 'speed' ? 'dial-page-visible' : 'dial-page-hidden'
                 }`}

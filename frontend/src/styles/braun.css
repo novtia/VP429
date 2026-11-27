@@ -43,10 +43,16 @@
 }
 
 .tb-status-chip {
-  transition: background-color 140ms ease, color 140ms ease;
+  transition: background-color 110ms ease-out, color 110ms ease-out, box-shadow 110ms ease-out;
 }
+
 .tb-status-chip:hover {
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.tb-status-chip:active {
+  background: rgba(25, 25, 24, 0.08);
+  box-shadow: inset 0 1.5px 2.5px rgba(25, 25, 24, 0.16);
 }
 
 .tb-win-btn {
@@ -57,16 +63,19 @@
   border: 1px solid transparent;
   transition: all 140ms ease;
 }
+
 .tb-win-btn:hover {
   background: linear-gradient(180deg, #f8f7f2 0%, #e9e7df 100%);
   border-color: #c5c2b6;
   color: #191918;
   box-shadow: 0 1px 2px rgba(25, 25, 24, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
+
 .tb-win-btn:active {
   background: #dedcd3;
   box-shadow: inset 0 1.5px 2.5px rgba(25, 25, 24, 0.14);
 }
+
 .tb-win-close:hover {
   background: linear-gradient(180deg, #f25829 0%, #df4215 100%);
   border-color: #b5320c;
@@ -84,6 +93,7 @@
     inset 1px 0 0 rgba(255, 255, 255, 0.45);
   transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+
 .braun-sidebar.is-expanded {
   width: 172px;
 }
@@ -104,12 +114,22 @@
   border-radius: 6px;
   color: #5b5952;
   border: 1px solid transparent;
-  transition: all 150ms ease;
+  transition: background-color 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out, box-shadow 120ms ease-out, transform 90ms ease-out;
 }
+
 .sb-nav-btn:hover:not(.is-active) {
-  background: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.5);
+  border-color: rgba(197, 194, 182, 0.55);
   color: #191918;
 }
+
+.sb-nav-btn:active {
+  transform: translateY(0.5px);
+  background: #dbd8ce;
+  border-color: #bab7ab;
+  box-shadow: inset 0 1.5px 3px rgba(25, 25, 24, 0.16);
+}
+
 .sb-nav-btn.is-active {
   background: linear-gradient(180deg, #faf9f5 0%, #efede6 100%);
   color: #191918;
@@ -119,6 +139,7 @@
     0 2px 5px rgba(25, 25, 24, 0.11),
     inset 0 1px 0 rgba(255, 255, 255, 0.95);
 }
+
 .sb-nav-btn.is-active .sb-ico {
   color: #e84c1e;
 }
@@ -134,6 +155,7 @@
   background: transparent;
   transition: background-color 180ms ease, box-shadow 180ms ease;
 }
+
 .sb-nav-btn.is-active .sb-led-slit {
   background: #e84c1e;
   box-shadow: 0 0 6px rgba(232, 76, 30, 0.55);
@@ -158,6 +180,7 @@
   transition: opacity 140ms ease, transform 140ms ease;
   z-index: 40;
 }
+
 .braun-sidebar:not(.is-expanded) .sb-nav-btn:hover .sb-tooltip {
   opacity: 1;
   transform: translateY(-50%) translateX(0);
@@ -169,165 +192,285 @@
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
-.sb-power-socket {
-  background: linear-gradient(180deg, #d7d5cb 0%, #e1dfd6 100%);
-  border: 1px solid #bdbab0;
-  border-bottom-color: #efede6;
+/* 3-LED Hardware Status Array Above Power Keycap */
+.sb-led-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 60% 65%, #b8b5aa 0%, #9b988d 65%, #848177 100%);
   box-shadow:
-    inset 0 2px 4px rgba(25, 25, 24, 0.16),
+    inset 0.6px 0.8px 1.2px rgba(25, 25, 24, 0.45),
     0 1px 0 rgba(255, 255, 255, 0.88);
+  transition: background 140ms ease-out, box-shadow 140ms ease-out;
 }
 
+@keyframes sbLedStepOrange {
+
+  0%,
+  38% {
+    background: radial-gradient(circle at 42% 38%, #ffe0cc 0%, #ff6a3d 52%, #c9380f 100%);
+    box-shadow: 0 0 5px rgba(232, 76, 30, 0.68), inset 0 0.5px 0.8px rgba(255, 255, 255, 0.7), 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+
+  50%,
+  100% {
+    background: radial-gradient(circle at 60% 65%, #b8b5aa 0%, #9b988d 65%, #848177 100%);
+    box-shadow: inset 0.6px 0.8px 1.2px rgba(25, 25, 24, 0.45), 0 1px 0 rgba(255, 255, 255, 0.88);
+  }
+}
+
+.sb-power-assembly.is-launching .sb-led-dot {
+  animation: sbLedStepOrange 0.72s linear infinite;
+}
+
+.sb-power-assembly.is-launching .sb-led-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.sb-power-assembly.is-launching .sb-led-dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+
+.sb-power-assembly.is-launching .sb-led-dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+.sb-power-assembly.is-stopping .sb-led-dot {
+  animation: sbLedStepOrange 0.6s linear infinite;
+}
+
+.sb-power-assembly.is-stopping .sb-led-dot:nth-child(3) {
+  animation-delay: 0s;
+}
+
+.sb-power-assembly.is-stopping .sb-led-dot:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.sb-power-assembly.is-stopping .sb-led-dot:nth-child(1) {
+  animation-delay: 0.28s;
+}
+
+.sb-power-assembly.is-running .sb-led-dot {
+  background: radial-gradient(circle at 42% 38%, #b8ffd2 0%, #37c771 54%, #187a40 100%);
+  box-shadow:
+    0 0 4.5px rgba(45, 184, 100, 0.55),
+    inset 0 0.5px 0.8px rgba(255, 255, 255, 0.75),
+    0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.sb-power-assembly.is-running:has(.sb-power-btn:hover) .sb-led-dot {
+  background: radial-gradient(circle at 42% 38%, #ffd8c2 0%, #ff6a3d 54%, #c4360d 100%);
+  box-shadow:
+    0 0 4.5px rgba(232, 76, 30, 0.55),
+    inset 0 0.5px 0.8px rgba(255, 255, 255, 0.7),
+    0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+/* Milled Ceramic Power Keycap Socket */
+.sb-power-socket {
+  background: linear-gradient(148deg, #cbc8bd 0%, #d8d5cb 55%, #e2e0d7 100%);
+  border: 1px solid #b8b5a9;
+  border-bottom-color: #f4f3ee;
+  border-right-color: #efede6;
+  padding: 4px 4px 6px 4px;
+  box-shadow:
+    inset 1.5px 2px 4px rgba(25, 25, 24, 0.22),
+    inset -1px -1px 2px rgba(255, 255, 255, 0.65),
+    0 1px 0 rgba(255, 255, 255, 0.92);
+}
+
+/* Sculpted Ceramic / Bakelite Pushbutton Keycap (Physical 3D Skirt + Concave Finger Dish) */
 .sb-power-btn {
-  background: linear-gradient(180deg, #ff693b 0%, #e84c1e 65%, #c93a10 100%);
-  color: #ffffff;
-  border: 1px solid #a82e0b;
-  border-bottom-width: 2px;
+  position: relative;
+  background:
+    radial-gradient(ellipse 72% 58% at 44% 34%, rgba(255, 218, 194, 0.26) 0%, rgba(255, 110, 65, 0) 68%),
+    linear-gradient(168deg, #f56235 0%, #e44a1c 56%, #cb3b11 100%);
+  color: #fffaf7;
+  border: 1px solid #b5320c;
   box-shadow:
-    0 2px 6px rgba(232, 76, 30, 0.32),
-    inset 0 1px 0 rgba(255, 224, 206, 0.55);
-  transition: all 160ms ease;
-}
-.sb-power-btn:hover {
-  background: linear-gradient(180deg, #ff764b 0%, #ef5425 65%, #d13e13 100%);
-}
-.sb-power-btn:active {
-  transform: translateY(1px);
-  border-bottom-width: 1px;
-}
-.sb-power-btn.is-running {
-  background: linear-gradient(180deg, #272925 0%, #1b1c19 100%);
-  color: #5bd68a;
-  border-color: #111210;
-  box-shadow:
-    0 2px 6px rgba(0, 0, 0, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.14);
-}
-.sb-power-btn.is-running:hover {
-  color: #ff794e;
-  border-color: #4a2418;
+    0 2.5px 0 #962607,
+    0 3.5px 5px rgba(25, 25, 24, 0.28),
+    inset 0 1px 1px rgba(255, 236, 224, 0.72),
+    inset 1px 0 1px rgba(255, 220, 200, 0.26),
+    inset 0 -1.5px 2px rgba(120, 24, 0, 0.35);
+  transition: background 120ms ease-out, border-color 120ms ease-out, box-shadow 100ms ease-out, color 120ms ease-out, transform 80ms ease-out;
 }
 
-/* Multi-Stepped CNC Sculpted Dial Bezel */
+.sb-power-btn::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 4px;
+  background: radial-gradient(circle at 50% 62%, rgba(255, 255, 255, 0.08) 0%, rgba(0, 0, 0, 0.06) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  pointer-events: none;
+}
+
+.sb-power-btn:hover:not(.is-launching):not(.is-stopping) {
+  background:
+    radial-gradient(ellipse 72% 58% at 44% 34%, rgba(255, 228, 208, 0.34) 0%, rgba(255, 110, 65, 0) 68%),
+    linear-gradient(168deg, #fb6c40 0%, #eb5122 56%, #d44014 100%);
+  box-shadow:
+    0 2.5px 0 #9f2a08,
+    0 4px 7px rgba(232, 76, 30, 0.32),
+    inset 0 1px 1px rgba(255, 244, 236, 0.82),
+    inset 0 -1.5px 2px rgba(120, 24, 0, 0.3);
+}
+
+.sb-power-btn:active {
+  transform: translateY(2px);
+  box-shadow:
+    0 0.5px 0 #8a2206,
+    0 1px 2px rgba(25, 25, 24, 0.26),
+    inset 0 2px 4px rgba(95, 18, 0, 0.45);
+}
+
+.sb-power-btn.is-launching,
+.sb-power-btn.is-stopping {
+  transform: translateY(1.5px);
+  background:
+    radial-gradient(ellipse 70% 56% at 44% 32%, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0) 68%),
+    linear-gradient(168deg, #2d2c29 0%, #20201d 58%, #171715 100%);
+  color: #ff7e52;
+  border-color: #141412;
+  box-shadow:
+    0 1px 0 #0d0d0c,
+    0 1.5px 3px rgba(0, 0, 0, 0.32),
+    inset 0 1.5px 3px rgba(0, 0, 0, 0.55),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.sb-power-btn.is-launching::before,
+.sb-power-btn.is-stopping::before {
+  border-color: rgba(255, 126, 82, 0.14);
+}
+
+.sb-power-btn.is-running {
+  background:
+    radial-gradient(ellipse 72% 58% at 42% 30%, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0) 66%),
+    linear-gradient(168deg, #32342f 0%, #232521 56%, #181a17 100%);
+  color: #5bd68a;
+  border-color: #151614;
+  box-shadow:
+    0 2.5px 0 #0c0d0b,
+    0 3.5px 6px rgba(0, 0, 0, 0.32),
+    inset 0 1px 1px rgba(255, 255, 255, 0.22),
+    inset 1px 0 1px rgba(255, 255, 255, 0.08),
+    inset 0 -1.5px 2px rgba(0, 0, 0, 0.45);
+}
+
+.sb-power-btn.is-running::before {
+  border-color: rgba(255, 255, 255, 0.07);
+}
+
+.sb-power-btn.is-running svg {
+  filter: drop-shadow(0 0 3.5px rgba(91, 214, 138, 0.36));
+}
+
+.sb-power-btn.is-running:hover:not(.is-stopping) {
+  color: #ff794e;
+  background:
+    radial-gradient(ellipse 72% 58% at 42% 30%, rgba(255, 160, 120, 0.12) 0%, rgba(255, 255, 255, 0) 66%),
+    linear-gradient(168deg, #373330 0%, #262321 56%, #1a1816 100%);
+  border-color: #2b1d18;
+  box-shadow:
+    0 2.5px 0 #0f0c0b,
+    0 4px 7px rgba(0, 0, 0, 0.34),
+    inset 0 1px 1px rgba(255, 210, 190, 0.22),
+    inset 0 -1.5px 2px rgba(0, 0, 0, 0.45);
+}
+
+.sb-power-btn.is-running:hover:not(.is-stopping) svg {
+  filter: drop-shadow(0 0 3.5px rgba(255, 106, 61, 0.4));
+}
+
+.sb-power-btn.is-running:active {
+  transform: translateY(2px);
+  box-shadow:
+    0 0.5px 0 #0a0b0a,
+    0 1px 2px rgba(0, 0, 0, 0.3),
+    inset 0 2px 4px rgba(0, 0, 0, 0.65);
+}
+
+/* Glazed Ceramic Bezel — vertical outer wall + single inward-sloping cone */
 .dial-bezel {
   position: relative;
   background:
-    /* Toroidal crown sheen: outer crown highlight, V-cut shadow, inner crown highlight */
-    radial-gradient(
-      closest-side circle at 50% 50%,
-      rgba(255, 255, 255, 0) calc(100% - 10px),
-      rgba(255, 255, 255, 0.30) calc(100% - 8px),
-      rgba(255, 255, 255, 0) calc(100% - 6.2px),
-      rgba(25, 25, 24, 0.10) calc(100% - 5px),
-      rgba(255, 255, 255, 0) calc(100% - 3.8px),
-      rgba(255, 255, 255, 0.38) calc(100% - 2.6px),
-      rgba(255, 255, 255, 0) calc(100% - 1.2px)
-    ),
-    /* Fine lathe-turned concentric grain */
-    repeating-radial-gradient(
-      circle at 50% 50%,
-      rgba(255, 255, 255, 0) 0px,
-      rgba(255, 255, 255, 0) 0.8px,
-      rgba(30, 28, 22, 0.05) 1.1px,
-      rgba(255, 255, 255, 0.09) 1.5px,
-      rgba(255, 255, 255, 0) 1.9px
-    ),
-    /* Anisotropic "bow-tie" specular lobes of spun metal (light from top-left) */
-    conic-gradient(
-      from 0deg at 50% 50%,
-      rgba(25, 25, 24, 0.05) 0deg,
-      rgba(25, 25, 24, 0.17) 45deg,
-      rgba(25, 25, 24, 0.03) 95deg,
-      rgba(255, 255, 255, 0.40) 135deg,
-      rgba(25, 25, 24, 0.03) 175deg,
-      rgba(25, 25, 24, 0.19) 225deg,
-      rgba(25, 25, 24, 0.03) 272deg,
-      rgba(255, 255, 255, 0.66) 315deg,
-      rgba(25, 25, 24, 0.05) 360deg
-    ),
-    linear-gradient(142deg, #fcfbf8 0%, #e9e7df 44%, #cfcdc3 78%, #bab7ac 100%);
-  border: 1px solid #a19e92;
+    radial-gradient(closest-side circle at 50% 50%,
+      rgba(40, 37, 30, 0.16) calc(100% - 13px),
+      rgba(40, 37, 30, 0.0) calc(100% - 8.5px),
+      rgba(255, 255, 255, 0.0) calc(100% - 2.6px),
+      rgba(255, 255, 255, 0.85) calc(100% - 1.4px),
+      rgba(255, 255, 255, 0.0) 100%),
+    conic-gradient(from 0deg at 50% 50%,
+      #e4e1d8 0deg,
+      #eeebe3 45deg,
+      #f7f5ef 90deg,
+      #fdfcf8 135deg,
+      #f6f4ee 180deg,
+      #e7e4db 225deg,
+      #d9d5ca 270deg,
+      #d2cec2 315deg,
+      #e4e1d8 360deg);
+  border: none;
   box-shadow:
-    /* Tight contact shadow where the bezel seats into the socket */
-    0 0 0 1px rgba(25, 25, 24, 0.10),
-    0 1.5px 2px rgba(25, 25, 24, 0.22),
-    /* Deep ambient drop onto recessed chassis moat */
-    0 14px 28px rgba(25, 25, 24, 0.24),
-    4px 7px 14px rgba(25, 25, 24, 0.18),
-    -3px -3px 10px rgba(255, 255, 255, 0.55),
-    /* Crisp convex upper-left catch-light & lower-right underside */
-    inset 2.5px 2.5px 3px rgba(255, 255, 255, 0.95),
-    inset -2.5px -3px 5px rgba(25, 25, 24, 0.28);
+    -1px -1px 0 0.5px rgba(255, 255, 255, 0.75),
+    0.8px 1.8px 0 0.4px #bcb7aa,
+    1.4px 3px 0 0.2px rgba(150, 144, 130, 0.55),
+    2px 4px 4px rgba(30, 28, 22, 0.28),
+    4px 10px 20px rgba(30, 28, 22, 0.20),
+    0 16px 30px rgba(30, 28, 22, 0.12);
 }
-/* Precision V-cut lathe groove across the crown (dark near wall, lit far wall) */
+
 .dial-bezel::before {
   content: "";
   position: absolute;
-  inset: 4.5px;
+  inset: 0;
   border-radius: 9999px;
-  padding: 1.4px;
-  background: conic-gradient(
-    from 0deg,
-    rgba(25, 25, 24, 0.30) 0deg,
-    rgba(255, 255, 255, 0.45) 90deg,
-    rgba(255, 255, 255, 0.95) 135deg,
-    rgba(255, 255, 255, 0.45) 180deg,
-    rgba(25, 25, 24, 0.30) 270deg,
-    rgba(25, 25, 24, 0.45) 315deg,
-    rgba(25, 25, 24, 0.30) 360deg
-  );
+  padding: 1.2px;
+  background: conic-gradient(from 0deg,
+      rgba(255, 255, 255, 0.85) 0deg,
+      rgba(255, 255, 255, 0.35) 90deg,
+      rgba(255, 255, 255, 0.10) 135deg,
+      rgba(255, 255, 255, 0.35) 180deg,
+      rgba(255, 255, 255, 0.85) 270deg,
+      rgba(255, 255, 255, 1) 315deg,
+      rgba(255, 255, 255, 0.85) 360deg);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  pointer-events: none;
-}
-/* Diamond-cut polished outer bevel: narrow mirror edge with sharp specular glints */
-.dial-bezel::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: 9999px;
-  padding: 2px;
-  background: conic-gradient(
-    from 0deg,
-    rgba(255, 255, 255, 0.55) 0deg,
-    rgba(110, 106, 94, 0.55) 45deg,
-    rgba(255, 255, 255, 0.45) 105deg,
-    #ffffff 133deg,
-    #ffffff 137deg,
-    rgba(255, 255, 255, 0.40) 165deg,
-    rgba(80, 76, 66, 0.65) 225deg,
-    rgba(255, 255, 255, 0.45) 285deg,
-    #ffffff 313deg,
-    #ffffff 317deg,
-    rgba(255, 255, 255, 0.55) 360deg
-  );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0.8;
   pointer-events: none;
 }
 
-.dial-chamfer {
+.dial-bezel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  padding: 13px;
   background:
-    conic-gradient(
-      from 0deg at 50% 50%,
-      rgba(255, 255, 255, 0.0) 0deg,
-      rgba(255, 255, 255, 0.28) 135deg,
-      rgba(255, 255, 255, 0.0) 225deg,
-      rgba(25, 25, 24, 0.18) 315deg,
-      rgba(255, 255, 255, 0.0) 360deg
-    ),
-    linear-gradient(142deg, #8b887e 0%, #b5b2a6 46%, #e2e0d7 82%, #f7f6f1 100%);
-  padding: 3.5px;
+    radial-gradient(ellipse 46% 34% at 76% 80%, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.35) 45%, rgba(255, 255, 255, 0) 75%),
+    radial-gradient(ellipse 30% 16% at 24% 16%, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0) 70%),
+    radial-gradient(ellipse 22% 12% at 88% 34%, rgba(255, 255, 255, 0.30) 0%, rgba(255, 255, 255, 0) 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Crystal seat: thin dark enamel step where the ceramic cone drops to the glass */
+.dial-chamfer {
+  background: conic-gradient(from 0deg,
+      #2c2d29 0deg,
+      #3b3c37 135deg,
+      #2c2d29 225deg,
+      #1c1d1a 315deg,
+      #2c2d29 360deg);
+  padding: 2px;
   box-shadow:
-    inset 2px 2.5px 4px rgba(25, 25, 24, 0.45),
-    inset -1.5px -1.5px 3px rgba(255, 255, 255, 0.85),
-    /* Polished seat ring where crystal meets chamfer */
-    inset 0 0 0 0.5px rgba(255, 255, 255, 0.35),
-    0 0 0 1px rgba(25, 25, 24, 0.12),
-    0 1px 1px rgba(255, 255, 255, 0.6);
+    0 0 0 0.6px rgba(120, 114, 100, 0.55),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.10);
 }
 
 .dial-well {
@@ -347,6 +490,7 @@
     inset 0 0 0 1.5px #101110,
     0 0 0 1px rgba(0, 0, 0, 0.42);
 }
+
 /* Domed sapphire crystal overlay: crescent reflection + edge refraction darkening */
 .dial-well::after {
   content: "";
@@ -376,11 +520,11 @@
     inset 0 -3px 6px rgba(0, 0, 0, 0.85);
   position: relative;
 }
+
 .ignition-bezel-ring {
   background:
     repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1px, rgba(255, 255, 255, 0.04) 1px 1.6px),
-    conic-gradient(
-      from 0deg,
+    conic-gradient(from 0deg,
       #252723 0deg,
       #1a1c19 45deg,
       #2a2c28 95deg,
@@ -389,12 +533,12 @@
       #181a17 225deg,
       #2c2e2a 272deg,
       #6a6d63 315deg,
-      #252723 360deg
-    );
+      #252723 360deg);
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.2),
     0 2px 6px rgba(0, 0, 0, 0.65);
 }
+
 .ignition-light-ring {
   box-shadow:
     0 0 14px rgba(232, 76, 30, 0.45),
@@ -402,35 +546,44 @@
   border: 1.5px solid rgba(255, 126, 82, 0.82);
   transition: border-color 260ms ease, box-shadow 260ms ease;
 }
+
 .ignition-socket.is-running .ignition-light-ring {
   border-color: rgba(91, 214, 138, 0.72);
   box-shadow:
     0 0 14px rgba(91, 214, 138, 0.32),
     inset 0 0 6px rgba(91, 214, 138, 0.28);
 }
+
 .ignition-socket.is-running:hover .ignition-light-ring {
   border-color: rgba(255, 106, 61, 0.78);
   box-shadow:
     0 0 16px rgba(232, 76, 30, 0.42),
     inset 0 0 6px rgba(255, 106, 61, 0.35);
 }
+
 .ignition-socket.is-stopping .ignition-light-ring {
   border-color: rgba(255, 106, 61, 0.88);
   box-shadow:
     0 0 20px rgba(232, 76, 30, 0.58),
     inset 0 0 10px rgba(255, 106, 61, 0.48);
 }
+
 .ignition-socket.is-stopping .power-btn-core {
   transform: scale(0.96);
 }
+
 @keyframes ignitionBreath {
-  0%, 100% {
+
+  0%,
+  100% {
     box-shadow: 0 0 12px rgba(232, 76, 30, 0.38), inset 0 0 6px rgba(255, 140, 96, 0.38);
   }
+
   50% {
     box-shadow: 0 0 22px rgba(255, 106, 61, 0.68), inset 0 0 10px rgba(255, 165, 122, 0.58);
   }
 }
+
 .ignition-socket:not(.is-running) .ignition-light-ring {
   animation: ignitionBreath 2.8s ease-in-out infinite;
 }
@@ -447,6 +600,7 @@
   position: relative;
   transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 200ms ease, background 200ms ease;
 }
+
 .power-btn-core::before {
   content: "";
   position: absolute;
@@ -456,6 +610,7 @@
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
   pointer-events: none;
 }
+
 .power-btn-core:hover {
   transform: scale(1.03);
   background:
@@ -467,9 +622,11 @@
     inset 0 1.5px 2.5px rgba(255, 240, 228, 0.72),
     inset 0 -3px 6px rgba(110, 22, 0, 0.48);
 }
+
 .power-btn-core:active {
   transform: scale(0.955);
 }
+
 .power-btn-stop {
   background:
     repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1.6px, rgba(255, 255, 255, 0.028) 1.6px 2.2px),
@@ -480,9 +637,11 @@
     inset 0 1.5px 2px rgba(255, 255, 255, 0.18),
     inset 0 -3px 6px rgba(0, 0, 0, 0.72);
 }
+
 .power-btn-stop::before {
   border-color: rgba(91, 214, 138, 0.24);
 }
+
 .power-btn-stop:hover {
   background:
     repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0px 1.6px, rgba(255, 255, 255, 0.03) 1.6px 2.2px),
@@ -497,10 +656,12 @@
   backdrop-filter: blur(4px);
   transition: all 150ms ease;
 }
+
 .btn-embedded-node:hover {
   background: rgba(12, 13, 12, 0.68);
   border-color: rgba(255, 255, 255, 0.52);
 }
+
 .power-btn-stop .btn-embedded-node {
   background: rgba(10, 11, 10, 0.62);
   border-color: rgba(91, 214, 138, 0.32);
@@ -512,9 +673,16 @@
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45);
   transition: all 150ms ease;
 }
+
 .dial-pager-pill:hover {
   background: #272a26;
   border-color: #e84c1e;
+}
+
+.dial-pager-pill:active {
+  background: #141513;
+  transform: translateY(0.5px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.7);
 }
 
 /* Recessed Ceramic Controls & Chassis Backplane */
@@ -528,6 +696,7 @@
   background-size: 100% 100%, 100% 4px, 28px 28px, 28px 28px;
   box-shadow: inset 0 2px 10px rgba(25, 25, 24, 0.07);
 }
+
 .chassis-screw {
   width: 9px;
   height: 9px;
@@ -536,6 +705,7 @@
   border: 1px solid #a8a599;
   box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.75), 0 1px 1px rgba(25, 25, 24, 0.12);
 }
+
 .chassis-screw::after {
   content: "";
   position: absolute;
@@ -567,8 +737,23 @@
     inset 1.5px 1.5px 2px rgba(25, 25, 24, 0.07),
     inset -1px -1px 0 rgba(255, 255, 255, 0.72),
     0 1px 0 rgba(255, 255, 255, 0.95);
-  transition: all 160ms ease;
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out, background 140ms ease-out;
 }
+
+.hw-module-card:hover {
+  background: linear-gradient(162deg, #e4e2d8 0%, #edece4 55%, #f3f1ea 100%);
+  border-color: #b2afa2;
+}
+
+.hw-module-card:active {
+  background: linear-gradient(162deg, #dedcd1 0%, #e8e6dd 55%, #eeece4 100%);
+  border-color: #a6a295;
+  box-shadow:
+    inset 0 3px 6px rgba(25, 25, 24, 0.22),
+    inset 1.5px 1.5px 3px rgba(25, 25, 24, 0.13),
+    0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
 .hw-slide-track {
   width: 40px;
   height: 20px;
@@ -578,12 +763,14 @@
   border-bottom-color: #dcdad1;
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.24), 0 1px 0 rgba(255, 255, 255, 0.85);
   position: relative;
-  transition: background-color 180ms ease;
+  transition: background-color 140ms ease-out;
 }
+
 .hw-slide-track.pill-on {
   background: linear-gradient(180deg, #d94115 0%, #ef5425 100%);
   border-color: #a82e0b;
 }
+
 .hw-slide-thumb {
   width: 16px;
   height: 14px;
@@ -598,8 +785,9 @@
   align-items: center;
   justify-content: center;
   gap: 2px;
-  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 130ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+
 .hw-slide-thumb::before,
 .hw-slide-thumb::after {
   content: "";
@@ -607,6 +795,7 @@
   height: 7px;
   background: #c4c1b7;
 }
+
 .hw-slide-track.pill-on .hw-slide-thumb {
   transform: translateX(18px);
 }
@@ -616,8 +805,19 @@
   border: 1px solid #ccc9be;
   border-bottom-color: #e2e0d7;
   box-shadow: inset 0 1.5px 3.5px rgba(25, 25, 24, 0.11), 0 1px 0 rgba(255, 255, 255, 0.92);
-  transition: all 150ms ease;
+  transition: border-color 130ms ease-out, background 130ms ease-out, box-shadow 130ms ease-out;
 }
+
+.hw-channel-row:hover {
+  background: linear-gradient(165deg, #e5e3da 0%, #eeece5 70%, #f3f2ec 100%);
+  border-color: #b5b2a5;
+}
+
+.hw-channel-row:active {
+  background: linear-gradient(165deg, #dedcd2 0%, #e7e5dc 70%, #edebe3 100%);
+  box-shadow: inset 0 2.5px 5px rgba(25, 25, 24, 0.2), 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
 .hw-channel-row.is-active {
   border-color: rgba(232, 76, 30, 0.58);
   box-shadow: inset 2.5px 0 0 #e84c1e, inset 0 2px 4.5px rgba(25, 25, 24, 0.15), 0 1px 0 rgba(255, 255, 255, 0.95);
@@ -629,14 +829,28 @@
   border-bottom-color: #e0ded5;
   box-shadow: inset 0 2px 4px rgba(25, 25, 24, 0.16), 0 1px 0 rgba(255, 255, 255, 0.92);
 }
+
 .hw-keycap {
   background: linear-gradient(180deg, #f6f5f0 0%, #e7e5dd 100%);
   border: 1px solid #c5c2b7;
   border-bottom-width: 2px;
   color: #54524c;
   box-shadow: 0 1px 2px rgba(25, 25, 24, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85);
-  transition: all 140ms ease;
+  transition: background 110ms ease-out, border-color 110ms ease-out, color 110ms ease-out, box-shadow 110ms ease-out, transform 70ms ease-out;
 }
+
+.hw-keycap:hover:not(.is-active) {
+  background: linear-gradient(180deg, #fbfaf6 0%, #eceae2 100%);
+  border-color: #a8a599;
+  color: #191918;
+}
+
+.hw-keycap:active {
+  transform: translateY(1px);
+  border-bottom-width: 1px;
+  box-shadow: inset 0 1.5px 3px rgba(25, 25, 24, 0.22);
+}
+
 .hw-keycap.is-active {
   background: linear-gradient(180deg, #1b1c19 0%, #272925 100%);
   border-color: #111210;
@@ -648,37 +862,136 @@
 }
 
 .hw-readout-bay {
+  position: relative;
   background: linear-gradient(166deg, #e2e0d7 0%, #ebe9e1 62%, #f1efe8 100%);
   border: 1px solid #c0bdb1;
   border-bottom-color: #dedcd3;
   box-shadow: inset 0 2.5px 5px rgba(25, 25, 24, 0.16), 0 1px 0 rgba(255, 255, 255, 0.96);
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out, background 140ms ease-out;
 }
+
+@keyframes probeScan {
+  0% {
+    left: 2%;
+    opacity: 0;
+  }
+
+  14% {
+    opacity: 1;
+  }
+
+  86% {
+    opacity: 1;
+  }
+
+  100% {
+    left: 66%;
+    opacity: 0;
+  }
+}
+
+@keyframes hwSpin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hw-readout-bay::after {
+  content: "";
+  position: absolute;
+  left: 2%;
+  top: 1px;
+  bottom: 1px;
+  width: 32%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, transparent 0%, rgba(232, 76, 30, 0.12) 55%, rgba(232, 76, 30, 0.34) 94%, rgba(255, 160, 120, 0.7) 100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.hw-readout-bay.is-probing {
+  border-color: rgba(232, 76, 30, 0.62);
+  box-shadow: inset 0 2.5px 5px rgba(25, 25, 24, 0.2), inset 0 0 0 1px rgba(232, 76, 30, 0.16), 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+.hw-readout-bay.is-probing::after {
+  opacity: 1;
+  animation: probeScan 0.56s linear infinite;
+}
+
+.hw-readout-bay.is-probe-done {
+  border-color: rgba(31, 138, 76, 0.7);
+  box-shadow: inset 0 2.5px 5px rgba(25, 25, 24, 0.16), inset 0 0 0 1px rgba(31, 138, 76, 0.24), 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
 .hw-meter-trough {
   background: #cfcdc3;
   border: 1px solid #b4b1a5;
   box-shadow: inset 0 2px 4px rgba(25, 25, 24, 0.28), 0 1px 0 rgba(255, 255, 255, 0.92);
 }
+
 .hw-micro-btn {
   background: linear-gradient(180deg, #f8f7f2 0%, #e5e3da 100%);
   border: 1px solid #c0bdb1;
   border-bottom-width: 2px;
   box-shadow: 0 1px 2px rgba(25, 25, 24, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  transition: all 140ms ease;
+  transition: background 110ms ease-out, border-color 110ms ease-out, color 110ms ease-out, box-shadow 110ms ease-out, transform 70ms ease-out;
 }
-.hw-micro-btn:hover {
+
+.hw-micro-btn:hover:not(.is-probing) {
+  background: linear-gradient(180deg, #ffffff 0%, #eceae2 100%);
   border-color: #e84c1e;
   color: #e84c1e;
+  box-shadow: 0 2px 5px rgba(232, 76, 30, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.95);
 }
+
+.hw-micro-btn:active {
+  transform: translateY(1px);
+  border-bottom-width: 1px;
+  background: #dfddd4;
+  box-shadow: inset 0 1.5px 3px rgba(25, 25, 24, 0.22);
+}
+
+.hw-micro-btn.is-probing {
+  transform: translateY(1px);
+  border-bottom-width: 1px;
+  background: linear-gradient(180deg, #1b1c19 0%, #262824 100%);
+  border-color: #111210;
+  border-top-color: #e84c1e;
+  color: #ff9c73;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.55);
+}
+
+.hw-micro-btn.is-probing .hw-spin-ico {
+  animation: hwSpin 0.65s linear infinite;
+}
+
+.hw-micro-btn.is-probe-done {
+  background: linear-gradient(180deg, #eef6f0 0%, #e0eee4 100%);
+  border-color: #1f8a4c;
+  color: #1f8a4c;
+}
+
 .hw-btn-primary {
   background: linear-gradient(180deg, #ff693b 0%, #e84c1e 65%, #c93a10 100%);
   color: #ffffff;
   border: 1px solid #a82e0b;
   border-bottom-width: 2px;
   box-shadow: 0 2px 5px rgba(232, 76, 30, 0.25), inset 0 1px 0 rgba(255, 224, 206, 0.52);
-  transition: all 140ms ease;
+  transition: background 110ms ease-out, transform 70ms ease-out, box-shadow 110ms ease-out;
 }
+
 .hw-btn-primary:hover {
   background: linear-gradient(180deg, #ff764b 0%, #ef5425 65%, #d13e13 100%);
+}
+
+.hw-btn-primary:active {
+  transform: translateY(1px);
+  border-bottom-width: 1px;
 }
 
 .hw-pin {
@@ -688,75 +1001,323 @@
   background: #f5f4ef;
   border: 1.5px solid #b8b5a9;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  transition: border-color 140ms ease-out, background-color 140ms ease-out, box-shadow 140ms ease-out;
 }
-.hw-pin.pin-orange { border-color: #e84c1e; background: #ffccb8; }
-.hw-pin.pin-green { border-color: #1f8a4c; background: #bfead0; }
 
-/* PCB SVG & Animations */
-.trench-rail { fill: none; stroke: #bcb9ad; stroke-width: 1.2; stroke-linecap: round; }
-.trench-groove { fill: none; stroke: rgba(25, 25, 24, 0.08); stroke-width: 5.5; stroke-linecap: round; }
+.hw-pin.pin-orange {
+  border-color: #e84c1e;
+  background: #ffccb8;
+}
+
+.hw-pin.pin-green {
+  border-color: #1f8a4c;
+  background: #bfead0;
+}
+
+.hw-pin.pin-flash {
+  border-color: #e84c1e;
+  background: #ff6a3d;
+  box-shadow: 0 0 0 2.5px rgba(232, 76, 30, 0.28);
+}
+
+.hw-pin.pin-flash-green {
+  border-color: #1f8a4c;
+  background: #5bd68a;
+  box-shadow: 0 0 0 2.5px rgba(31, 138, 76, 0.28);
+}
+
+/* PCB SVG & Jigsaw Card Sockets */
+.trench-rail {
+  fill: none;
+  stroke: #bcb9ad;
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+
+.trench-groove {
+  fill: none;
+  stroke: rgba(25, 25, 24, 0.08);
+  stroke-width: 5.5;
+  stroke-linecap: round;
+}
+
 .panel-group-relief {
   filter:
-    drop-shadow(3px 6px 7px rgba(42, 40, 34, 0.12))
-    drop-shadow(-2px -2px 4px rgba(255, 255, 255, 0.55));
+    drop-shadow(2.4px 4px 3.6px rgba(42, 40, 34, 0.2)) drop-shadow(0.8px 1.4px 1px rgba(42, 40, 34, 0.16)) drop-shadow(-1.4px -1.4px 2.4px rgba(255, 255, 255, 0.35));
 }
-.panel-shape { fill: url(#panelSurfaceGrad); stroke: rgba(255, 255, 255, 0.52); stroke-width: 0.85; }
-.pcb-trace { fill: none; stroke: #d2d0c6; stroke-width: 1.45; stroke-linecap: round; stroke-linejoin: round; transition: stroke 260ms ease; }
-.pcb-trace-thin { fill: none; stroke: #dbd9d0; stroke-width: 1.05; stroke-linecap: round; stroke-linejoin: round; }
-.pcb-trace-active-orange { stroke: rgba(232, 76, 30, 0.55) !important; stroke-width: 1.65 !important; }
-.pcb-trace-active-green { stroke: rgba(31, 138, 76, 0.52) !important; stroke-width: 1.65 !important; }
-.pcb-trace-off { stroke: #e2e0d8 !important; stroke-dasharray: 3 3; }
-.pcb-arc-rail { fill: none; stroke: #d2d0c6; stroke-width: 1.15; stroke-dasharray: 4 3; }
-.pcb-via-outer { fill: #f5f4ef; stroke: #b9b6aa; stroke-width: 1.35; }
-.pcb-via-inner { fill: #c7c4b8; }
-.pcb-via-accent { fill: #e84c1e; opacity: 0.45; }
-.pcb-via-green { fill: #1f8a4c; opacity: 0.4; }
-.pcb-smd { fill: #eceae2; stroke: #c7c4b9; stroke-width: 1; }
-.pcb-pad-gold { fill: #d8c8a8; stroke: #bcae90; stroke-width: 0.7; }
 
-@keyframes pcbFlowFwd { from { stroke-dashoffset: 180; } to { stroke-dashoffset: 0; } }
-@keyframes pcbFlowRev { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 180; } }
-.pcb-pulse-orange, .pcb-pulse-green {
-  fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
-  stroke-dasharray: 18 162; opacity: 0; transition: opacity 380ms ease;
+.panel-shape {
+  fill: url(#panelSurfaceGrad);
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 0.85;
 }
-.pcb-pulse-orange { stroke: #e84c1e; animation: pcbFlowFwd 3s linear infinite; }
-.pcb-pulse-green { stroke: #1f8a4c; animation: pcbFlowRev 2.6s linear infinite; }
-.pcb-pulse-slow { animation-duration: 3.9s; }
-.pcb-pulse-fast { animation-duration: 2.1s; }
-.pcb-live .pcb-pulse-orange:not(.pulse-muted) { opacity: 0.85; }
-.pcb-live .pcb-pulse-green:not(.pulse-muted) { opacity: 0.78; }
-.pcb-live .pcb-via-accent, .pcb-live .pcb-via-green { opacity: 0.95; }
-.dial-moat-underglow { opacity: 0.18; transition: opacity 420ms ease; }
-.pcb-live .dial-moat-underglow { opacity: 0.85; }
+
+.socket-cavity {
+  fill: url(#socketFloorGrad);
+  stroke: url(#socketFloorGrad);
+  stroke-width: 8;
+  stroke-linejoin: round;
+  filter: url(#socketInset);
+}
+
+.socket-rim {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 10.4;
+  stroke-linejoin: round;
+}
+
+.card-wall {
+  fill: url(#cardWallGrad);
+  stroke: rgba(60, 56, 46, 0.22);
+  stroke-width: 0.8;
+  transform: translate(0.9px, 2px);
+}
+
+.pcb-trace {
+  fill: none;
+  stroke: #d2d0c6;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 260ms ease;
+}
+
+.pcb-trace-thin {
+  fill: none;
+  stroke: #dbd9d0;
+  stroke-width: 1.05;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.pcb-trace-active-orange {
+  stroke: rgba(232, 76, 30, 0.55) !important;
+  stroke-width: 1.65 !important;
+}
+
+.pcb-trace-active-green {
+  stroke: rgba(31, 138, 76, 0.52) !important;
+  stroke-width: 1.65 !important;
+}
+
+.pcb-trace-off {
+  stroke: #e2e0d8 !important;
+  stroke-dasharray: 3 3;
+}
+
+.pcb-arc-rail {
+  fill: none;
+  stroke: #d2d0c6;
+  stroke-width: 1.15;
+  stroke-dasharray: 4 3;
+}
+
+.pcb-via-outer {
+  fill: #f5f4ef;
+  stroke: #b9b6aa;
+  stroke-width: 1.35;
+}
+
+.pcb-via-inner {
+  fill: #c7c4b8;
+}
+
+.pcb-via-accent {
+  fill: #e84c1e;
+  opacity: 0.45;
+}
+
+.pcb-via-green {
+  fill: #1f8a4c;
+  opacity: 0.4;
+}
+
+.pcb-smd {
+  fill: #eceae2;
+  stroke: #c7c4b9;
+  stroke-width: 1;
+}
+
+.pcb-pad-gold {
+  fill: #d8c8a8;
+  stroke: #bcae90;
+  stroke-width: 0.7;
+}
+
+@keyframes pcbFlowFwd {
+  from {
+    stroke-dashoffset: 180;
+  }
+
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes pcbFlowRev {
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: 180;
+  }
+}
+
+.pcb-pulse-orange,
+.pcb-pulse-green {
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 18 162;
+  opacity: 0;
+  transition: opacity 380ms ease;
+}
+
+.pcb-pulse-orange {
+  stroke: #e84c1e;
+  animation: pcbFlowFwd 3s linear infinite;
+}
+
+.pcb-pulse-green {
+  stroke: #1f8a4c;
+  animation: pcbFlowRev 2.6s linear infinite;
+}
+
+.pcb-pulse-slow {
+  animation-duration: 3.9s;
+}
+
+.pcb-pulse-fast {
+  animation-duration: 2.1s;
+}
+
+.pcb-live .pcb-pulse-orange:not(.pulse-muted) {
+  opacity: 0.85;
+}
+
+.pcb-live .pcb-pulse-green:not(.pulse-muted) {
+  opacity: 0.78;
+}
+
+.pcb-live .pcb-via-accent,
+.pcb-live .pcb-via-green {
+  opacity: 0.95;
+}
+
+.dial-moat-underglow {
+  opacity: 0.18;
+  transition: opacity 420ms ease;
+}
+
+.pcb-live .dial-moat-underglow {
+  opacity: 0.85;
+}
 
 /* Dial Page Transitions & Picker */
-.dial-page { transition: opacity 340ms cubic-bezier(0.22, 1, 0.36, 1), transform 380ms cubic-bezier(0.22, 1, 0.36, 1); }
-.dial-page-hidden { opacity: 0; transform: scale(0.88); pointer-events: none; }
-.dial-page-visible { opacity: 1; transform: scale(1); pointer-events: auto; }
-.dial-main-layer { transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease; }
-.dial-main-slid-down { transform: translateY(102%); opacity: 0.12; pointer-events: none; }
-.dial-picker-layer { transform: translateY(-102%); opacity: 0; pointer-events: none; transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease; }
-.dial-picker-open { transform: translateY(0%); opacity: 1; pointer-events: auto; }
+.dial-page {
+  transition: opacity 340ms cubic-bezier(0.22, 1, 0.36, 1), transform 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.dial-page-hidden {
+  opacity: 0;
+  transform: scale(0.88);
+  pointer-events: none;
+}
+
+.dial-page-visible {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.dial-main-layer {
+  transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease;
+}
+
+.dial-main-slid-down {
+  transform: translateY(102%);
+  opacity: 0.12;
+  pointer-events: none;
+}
+
+.dial-picker-layer {
+  transform: translateY(-102%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 280ms ease;
+}
+
+.dial-picker-open {
+  transform: translateY(0%);
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .circular-list-mask {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 16%, black 84%, transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0%, black 16%, black 84%, transparent 100%);
 }
-.circular-scroll { scrollbar-width: none; }
-.circular-scroll::-webkit-scrollbar { display: none; }
+
+.circular-scroll {
+  scrollbar-width: none;
+}
+
+.circular-scroll::-webkit-scrollbar {
+  display: none;
+}
 
 /* Nodes List & Grid Cards */
-.nodes-scroll::-webkit-scrollbar { width: 6px; }
-.nodes-scroll::-webkit-scrollbar-track { background: #e8e6de; }
-.nodes-scroll::-webkit-scrollbar-thumb { background: #bfbcb0; border-radius: 9999px; border: 1.5px solid #e8e6de; }
-.node-list-row { position: relative; border-bottom: 1px solid #e6e4dc; transition: background-color 140ms ease; }
-.node-list-row:last-child { border-bottom: none; }
-.node-list-row:hover { background: #eceae2; }
-.node-list-row.is-active { background: linear-gradient(90deg, rgba(232, 76, 30, 0.085) 0%, rgba(232, 76, 30, 0.02) 42%, transparent 100%); }
-.node-list-row.is-active::before {
-  content: ""; position: absolute; left: 0; top: 4px; bottom: 4px; width: 3px;
-  border-radius: 0 3px 3px 0; background: #e84c1e; box-shadow: 0 0 6px rgba(232, 76, 30, 0.45);
+.nodes-scroll::-webkit-scrollbar {
+  width: 6px;
 }
+
+.nodes-scroll::-webkit-scrollbar-track {
+  background: #e8e6de;
+}
+
+.nodes-scroll::-webkit-scrollbar-thumb {
+  background: #bfbcb0;
+  border-radius: 9999px;
+  border: 1.5px solid #e8e6de;
+}
+
+.node-list-row {
+  position: relative;
+  border-bottom: 1px solid #e6e4dc;
+  transition: background-color 140ms ease;
+}
+
+.node-list-row:last-child {
+  border-bottom: none;
+}
+
+.node-list-row:hover {
+  background: #eceae2;
+}
+
+.node-list-row:active {
+  background: #e2dfd5;
+}
+
+.node-list-row.is-active {
+  background: linear-gradient(90deg, rgba(232, 76, 30, 0.085) 0%, rgba(232, 76, 30, 0.02) 42%, transparent 100%);
+}
+
+.node-list-row.is-active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #e84c1e;
+  box-shadow: 0 0 6px rgba(232, 76, 30, 0.45);
+}
+
 .node-grid-card {
   position: relative;
   background: linear-gradient(164deg, #f9f8f4 0%, #f1efe8 65%, #eae8df 100%);
@@ -765,18 +1326,171 @@
   box-shadow: 0 2px 6px rgba(25, 25, 24, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.92);
   transition: all 150ms ease;
 }
+
 .node-grid-card:hover {
   border-color: #b4b0a2;
-  transform: translateY(-1px);
   box-shadow: 0 5px 12px rgba(25, 25, 24, 0.09), inset 0 1px 0 rgba(255, 255, 255, 0.96);
 }
+
+.node-grid-card:active {
+  background: linear-gradient(164deg, #eae8e0 0%, #e4e2d9 65%, #dfddd3 100%);
+  box-shadow: inset 0 2px 4px rgba(25, 25, 24, 0.14);
+}
+
 .node-grid-card.is-active {
   background: linear-gradient(164deg, #fffaf7 0%, #f6efe9 65%, #efe7df 100%);
   border-color: rgba(232, 76, 30, 0.72);
   box-shadow: inset 0 2.5px 0 #e84c1e, 0 4px 12px rgba(232, 76, 30, 0.12);
 }
 
-@keyframes pulseDot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.85); } }
-.pulse-dot { animation: pulseDot 1.8s ease-in-out infinite; }
-@keyframes pingBarBounce { 0%, 100% { transform: scaleY(0.35); } 50% { transform: scaleY(1); } }
-.ping-bar { width: 2.5px; height: 11px; border-radius: 1px; background: #e84c1e; transform-origin: bottom; animation: pingBarBounce 0.65s ease-in-out infinite; }
+@keyframes pulseDot {
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
+  }
+}
+
+.pulse-dot {
+  animation: pulseDot 1.8s ease-in-out infinite;
+}
+
+@keyframes pingBarBounce {
+
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.ping-bar {
+  width: 2.5px;
+  height: 11px;
+  border-radius: 1px;
+  background: #e84c1e;
+  transform-origin: bottom;
+  animation: pingBarBounce 0.65s ease-in-out infinite;
+}
+
+/* Full-Bleed Ceramic Relief World Map & Morphing Node Dropdown */
+.map-stage {
+  background-color: #d6d3c7;
+  background-image:
+    radial-gradient(ellipse 90% 82% at 38% 36%, rgba(255, 254, 248, 0.34) 0%, rgba(214, 211, 199, 0) 58%, rgba(60, 56, 46, 0.14) 100%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.09) 0px, rgba(255, 255, 255, 0.09) 1px, transparent 1px, transparent 3px);
+  box-shadow:
+    inset 3px 4px 14px rgba(32, 30, 24, 0.18),
+    inset -2px -2px 8px rgba(255, 255, 255, 0.35);
+}
+
+.hud-glass {
+  background: linear-gradient(162deg, rgba(252, 251, 247, 0.94) 0%, rgba(242, 240, 233, 0.92) 100%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid #c5c1b4;
+  border-bottom-color: #b2ae9f;
+  box-shadow:
+    0 10px 26px rgba(25, 25, 24, 0.15),
+    0 2px 5px rgba(25, 25, 24, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+}
+
+.morph-dock {
+  width: 274px;
+  height: 36px;
+  border-radius: 9px;
+  transform-origin: top right;
+  transition:
+    width 280ms cubic-bezier(0.22, 1, 0.36, 1),
+    height 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-radius 240ms ease,
+    box-shadow 260ms ease;
+}
+.morph-dock.is-open {
+  width: 316px;
+  height: calc(100% - 28px);
+  border-radius: 12px;
+  box-shadow:
+    0 16px 36px rgba(25, 25, 24, 0.2),
+    0 3px 8px rgba(25, 25, 24, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.98);
+}
+.morph-body {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.morph-dock.is-open .morph-body {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+  transition-delay: 80ms;
+}
+.morph-chevron {
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.morph-dock.is-open .morph-chevron {
+  transform: rotate(180deg);
+}
+
+@keyframes sonarPulse {
+  0% { r: 7.5; opacity: 0.8; stroke-width: 2; }
+  100% { r: 27; opacity: 0; stroke-width: 0.4; }
+}
+.beacon-pulse { animation: sonarPulse 2.2s cubic-bezier(0.16, 1, 0.3, 1) infinite; }
+
+@keyframes arcDashFlow {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
+}
+.chain-arc-flow { animation: arcDashFlow 1.05s linear infinite; }
+
+.country-plate { transition: fill 160ms ease, opacity 160ms ease; }
+.country-plate.has-nodes:hover { fill: url(#ceramic-land-hover); }
+.country-flag-layer {
+  transition: opacity 180ms ease, filter 180ms ease;
+  filter: saturate(0.82) contrast(0.96);
+}
+.country-flag-layer:hover {
+  opacity: 0.92 !important;
+  filter: saturate(0.98) contrast(1);
+}
+
+.map-beacon { cursor: pointer; }
+.map-beacon .beacon-cap {
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1);
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.map-beacon:hover .beacon-cap { transform: scale(1.15); }
+.map-beacon:hover .beacon-tag-bg { stroke: #191918; fill: #1b1c19; }
+.map-beacon:hover .beacon-tag-text { fill: #f7f6f1; }
+
+#map-camera {
+  transform-origin: 0px 0px;
+  transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.beacon-inner {
+  transform-origin: 0px 0px;
+  transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+#map-hud-tooltip {
+  background: rgba(27, 28, 25, 0.94);
+  color: #f4f3ee;
+  border: 1px solid #3c3e38;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.36);
+}

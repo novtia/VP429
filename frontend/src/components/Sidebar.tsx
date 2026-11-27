@@ -16,6 +16,8 @@ interface SidebarProps {
   activePage: NavPage;
   expanded: boolean;
   running: boolean;
+  launching: boolean;
+  stopping: boolean;
   nodeCount: number;
   onSelectPage: (page: NavPage) => void;
   onToggleExpand: () => void;
@@ -38,11 +40,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activePage,
   expanded,
   running,
+  launching,
+  stopping,
   nodeCount,
   onSelectPage,
   onToggleExpand,
   onPowerAction,
 }) => {
+  const powerStateCls = stopping
+    ? 'is-stopping'
+    : launching
+    ? 'is-launching'
+    : running
+    ? 'is-running'
+    : '';
+  const powerLabel = stopping
+    ? '断开中...'
+    : launching
+    ? '启动中...'
+    : running
+    ? '运行中 · 停止'
+    : '启动代理';
   const renderBtn = (item: (typeof primaryItems)[number]) => {
     const active = activePage === item.id;
     const { Icon } = item;
@@ -100,25 +118,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </nav>
       </div>
 
-      <div className="w-full flex flex-col gap-2">
-        <div className="flex items-center justify-center gap-1.5 opacity-60 pointer-events-none">
-          <span className="w-1 h-1 rounded-full bg-[#b4b1a6] shadow-[0_1px_0_rgba(255,255,255,0.8)]" />
-          <span className="w-1 h-1 rounded-full bg-[#b4b1a6] shadow-[0_1px_0_rgba(255,255,255,0.8)]" />
-          <span className="w-1 h-1 rounded-full bg-[#b4b1a6] shadow-[0_1px_0_rgba(255,255,255,0.8)]" />
+      <div className={`sb-power-assembly w-full flex flex-col gap-2 ${powerStateCls}`}>
+        <div className="flex items-center justify-center gap-2 pointer-events-none">
+          <span className="sb-led-dot" />
+          <span className="sb-led-dot" />
+          <span className="sb-led-dot" />
         </div>
 
-        <div className="sb-power-socket w-full p-1 rounded-[9px]">
+        <div className="sb-power-socket w-full rounded-[9px]">
           <button
             onClick={onPowerAction}
-            className={`sb-power-btn w-full h-9 rounded-[6px] px-2 cursor-pointer flex items-center justify-center gap-2 ${
-              running ? 'is-running' : ''
-            }`}
+            className={`sb-power-btn w-full h-9 rounded-[6px] px-2 cursor-pointer flex items-center justify-center gap-2 ${powerStateCls}`}
             title="启动 / 停止代理"
           >
             <Power size={16} className="shrink-0" />
             {expanded && (
               <span className="text-[11.5px] font-semibold tracking-wide whitespace-nowrap">
-                {running ? '运行中 · 停止' : '启动代理'}
+                {powerLabel}
               </span>
             )}
           </button>

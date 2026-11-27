@@ -256,17 +256,27 @@ export default function App() {
           activePage={activePage}
           expanded={sidebarExpanded}
           running={data.running}
+          launching={launching}
+          stopping={stopping}
           nodeCount={data.nodes.length}
           onSelectPage={setActivePage}
           onToggleExpand={handleToggleSidebar}
           onPowerAction={handlePowerAction}
         />
 
-        <main className="chassis-backplane flex-1 min-w-0 p-4 flex flex-col justify-center relative overflow-hidden">
-          <span className="chassis-screw absolute top-2 left-2 pointer-events-none" />
-          <span className="chassis-screw absolute top-2 right-2 pointer-events-none" />
-          <span className="chassis-screw absolute bottom-2 left-2 pointer-events-none" />
-          <span className="chassis-screw absolute bottom-2 right-2 pointer-events-none" />
+        <main
+          className={`chassis-backplane flex-1 min-w-0 flex flex-col justify-center relative overflow-hidden ${
+            activePage === 'nodes' ? 'p-0' : 'p-4'
+          }`}
+        >
+          {activePage !== 'nodes' && (
+            <>
+              <span className="chassis-screw absolute top-2 left-2 pointer-events-none" />
+              <span className="chassis-screw absolute top-2 right-2 pointer-events-none" />
+              <span className="chassis-screw absolute bottom-2 left-2 pointer-events-none" />
+              <span className="chassis-screw absolute bottom-2 right-2 pointer-events-none" />
+            </>
+          )}
 
           {activePage === 'dashboard' && (
             <DashboardPage
@@ -290,7 +300,24 @@ export default function App() {
               onElevate={handleElevate}
               onSetOutbound={handleSetOutbound}
               onSetRotation={handleSetRotation}
-              onCheckExitIp={() => isTauri() && api.checkExitIp().then(pollState)}
+              onCheckExitIp={() => {
+                setData((d) => ({ ...d, telemetry: { ...d.telemetry, checking_ip: true } }));
+                if (isTauri()) {
+                  api.checkExitIp().then(pollState).catch(() => pollState());
+                } else {
+                  setTimeout(() => {
+                    setData((d) => ({
+                      ...d,
+                      telemetry: {
+                        ...d.telemetry,
+                        checking_ip: false,
+                        exit_ip: d.telemetry.exit_ip || '178.249.213.185',
+                        exit_country_code: d.telemetry.exit_country_code || 'JP',
+                      },
+                    }));
+                  }, 540);
+                }
+              }}
               onLaunchShowSpeed={() => setDialPage('speed')}
               onLaunchComplete={() => {
                 setLaunching(false);
